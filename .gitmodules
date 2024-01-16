@@ -1,0 +1,3 @@
+[submodule "GaussianEditor"]
+	path = deps/GaussianEditor
+	url = https://github.com/buaacyw/GaussianEditor.git
