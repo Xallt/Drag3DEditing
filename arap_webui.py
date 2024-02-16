@@ -19,7 +19,11 @@ def main(mesh_path: str):
 
     mesh = trimesh.load_mesh(mesh_path)
     assert isinstance(mesh, trimesh.Trimesh)
-    mesh.apply_scale(0.05)
+
+    # Normalize the mesh to fit in a unit sphere.
+    bounding_sphere = mesh.bounding_sphere
+    mesh_diameter = 2 * bounding_sphere.primitive.radius
+    mesh.apply_scale(1.0 / mesh_diameter)
 
     mesh_handle = server.add_mesh_trimesh(
         name="/mesh",
