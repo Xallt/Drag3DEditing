@@ -11,10 +11,13 @@ import trimesh.ray
 import viser
 import viser.transforms as tf
 
-if __name__ == "__main__":
+import tyro
+
+
+def main(mesh_path: str):
     server = viser.ViserServer()
 
-    mesh = trimesh.load_mesh(Path(__file__).parent / "assets/dragon.obj")
+    mesh = trimesh.load_mesh(mesh_path)
     assert isinstance(mesh, trimesh.Trimesh)
     mesh.apply_scale(0.05)
 
@@ -75,3 +78,7 @@ if __name__ == "__main__":
 
     while True:
         time.sleep(10.0)
+
+
+if __name__ == "__main__":
+    tyro.cli(main, description=__doc__)
