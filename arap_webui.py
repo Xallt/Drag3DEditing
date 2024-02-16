@@ -19,6 +19,9 @@ def main(mesh_path: str):
 
     mesh = trimesh.load_mesh(mesh_path)
     assert isinstance(mesh, trimesh.Trimesh)
+    print(
+        f"Loaded mesh with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces."
+    )
 
     # Normalize the mesh to fit in a unit sphere.
     bounding_sphere = mesh.bounding_sphere
