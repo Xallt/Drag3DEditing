@@ -1,9 +1,4 @@
-"""Scene pointer events.
-
-This example shows how to use scene pointer events to specify rays, and how they can be
-used to interact with the scene (e.g., ray-mesh intersections).
-
-To get the demo data, see `./assets/download_dragon_mesh.sh`.
+"""ARAP (As-Rigid-As-Possible) deformation using a web UI.
 """
 
 import time
