@@ -46,7 +46,7 @@ def main(mesh_path: str):
 
         def add_hit_handle(hit_pos, R_world_mesh):
             # Create a sphere at the hit location.
-            hit_pos_mesh = trimesh.creation.icosphere(radius=0.1)
+            hit_pos_mesh = trimesh.creation.icosphere(radius=0.005)
             hit_pos_mesh.vertices += R_world_mesh @ hit_pos
             hit_pos_mesh.visual.vertex_colors = (1.0, 0.0, 0.0, 1.0)  # type: ignore
             hit_pos_handle = server.add_mesh_trimesh(
@@ -85,7 +85,7 @@ def main(mesh_path: str):
             normal = mesh.face_normals[tri_index]
 
             add_hit_handle(hit_pos, R_world_mesh)
-            add_hit_handle(hit_pos + normal, R_world_mesh)
+            add_hit_handle(hit_pos + normal * 0.03, R_world_mesh)
 
     # Button to clear spheres
     clear_button_handle = server.add_gui_button("Clear spheres")
