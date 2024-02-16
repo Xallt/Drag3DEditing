@@ -41,6 +41,16 @@ def main(mesh_path: str):
     def _(_):
         add_button_handle.disabled = True
 
+        def add_hit_handle(hit_pos, R_world_mesh):
+            # Create a sphere at the hit location.
+            hit_pos_mesh = trimesh.creation.icosphere(radius=0.1)
+            hit_pos_mesh.vertices += R_world_mesh @ hit_pos
+            hit_pos_mesh.visual.vertex_colors = (1.0, 0.0, 0.0, 1.0)  # type: ignore
+            hit_pos_handle = server.add_mesh_trimesh(
+                name=f"/hit_pos_{len(hit_pos_handles)}", mesh=hit_pos_mesh
+            )
+            hit_pos_handles.append(hit_pos_handle)
+
         @server.on_scene_click
         def scene_click_cb(message: viser.ScenePointerEvent) -> None:
             # Check for intersection with the mesh, using trimesh's ray-mesh intersection.
@@ -50,7 +60,7 @@ def main(mesh_path: str):
             origin = (R_mesh_world @ np.array(message.ray_origin)).reshape(1, 3)
             direction = (R_mesh_world @ np.array(message.ray_direction)).reshape(1, 3)
             intersector = trimesh.ray.ray_triangle.RayMeshIntersector(mesh)
-            hit_pos, _, _ = intersector.intersects_location(origin, direction)
+            hit_pos, _, tri_index = intersector.intersects_location(origin, direction)
 
             if len(hit_pos) == 0:
                 return
@@ -60,16 +70,19 @@ def main(mesh_path: str):
             server.remove_scene_click_callback(scene_click_cb)
 
             # Get the first hit position (based on distance from the ray origin).
-            hit_pos = min(hit_pos, key=lambda x: np.linalg.norm(x - origin))
+            hit_pos_idx = np.argmin(np.linalg.norm(hit_pos - origin, axis=1))
+            hit_pos = hit_pos[hit_pos_idx]
+            tri_index = tri_index[hit_pos_idx]
 
-            # Create a sphere at the hit location.
-            hit_pos_mesh = trimesh.creation.icosphere(radius=0.1)
-            hit_pos_mesh.vertices += R_world_mesh @ hit_pos
-            hit_pos_mesh.visual.vertex_colors = (1.0, 0.0, 0.0, 1.0)  # type: ignore
-            hit_pos_handle = server.add_mesh_trimesh(
-                name=f"/hit_pos_{len(hit_pos_handles)}", mesh=hit_pos_mesh
-            )
-            hit_pos_handles.append(hit_pos_handle)
+            tri_verts = mesh.vertices[mesh.faces[tri_index]]  # (3, 3)
+
+            barycentric_coords = trimesh.triangles.points_to_barycentric(
+                tri_verts[None], hit_pos[None]
+            )[0]
+            normal = mesh.face_normals[tri_index]
+
+            add_hit_handle(hit_pos, R_world_mesh)
+            add_hit_handle(hit_pos + normal, R_world_mesh)
 
     # Button to clear spheres
     clear_button_handle = server.add_gui_button("Clear spheres")
