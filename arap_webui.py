@@ -59,7 +59,7 @@ def main(mesh_path: str):
             R_mesh_world = R_world_mesh.inverse()
             origin = (R_mesh_world @ np.array(message.ray_origin)).reshape(1, 3)
             direction = (R_mesh_world @ np.array(message.ray_direction)).reshape(1, 3)
-            intersector = trimesh.ray.ray_triangle.RayMeshIntersector(mesh)
+            intersector = trimesh.ray.ray_pyembree.RayMeshIntersector(mesh)
             hit_pos, _, tri_index = intersector.intersects_location(origin, direction)
 
             if len(hit_pos) == 0:
