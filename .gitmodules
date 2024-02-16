@@ -1,3 +1,6 @@
 [submodule "GaussianEditor"]
 	path = deps/GaussianEditor
 	url = https://github.com/buaacyw/GaussianEditor.git
+[submodule "deps/DragDiffusion"]
+	path = deps/DragDiffusion
+	url = https://github.com/Yujun-Shi/DragDiffusion.git
