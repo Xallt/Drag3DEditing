@@ -37,8 +37,9 @@ def main(mesh_path: str):
 
     hit_pos_handles: List[viser.GlbHandle] = []
 
-    # Button to add spheres; when clicked, we add a scene pointer event listener.
-    add_button_handle = server.add_gui_button("Add sphere")
+    with server.add_gui_folder("Handles"):
+        add_button_handle = server.add_gui_button("Add handle")
+        clear_button_handle = server.add_gui_button("Clear handles")
 
     @add_button_handle.on_click
     def _(_):
@@ -86,9 +87,6 @@ def main(mesh_path: str):
 
             add_hit_handle(hit_pos, R_world_mesh)
             add_hit_handle(hit_pos + normal * 0.03, R_world_mesh)
-
-    # Button to clear spheres
-    clear_button_handle = server.add_gui_button("Clear spheres")
 
     @clear_button_handle.on_click
     def _(_):
