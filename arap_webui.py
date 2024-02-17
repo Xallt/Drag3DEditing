@@ -44,15 +44,17 @@ def main(mesh_path: str):
     def _(_):
         add_button_handle.disabled = True
 
-        def add_hit_handle(hit_pos, R_world_mesh):
+        def add_hit_handle(hit_pos):
             # Create a sphere at the hit location.
             hit_pos_mesh = trimesh.creation.icosphere(radius=0.005)
-            hit_pos_mesh.vertices += R_world_mesh @ hit_pos
             hit_pos_mesh.visual.vertex_colors = (1.0, 0.0, 0.0, 1.0)  # type: ignore
             hit_pos_handle = server.add_mesh_trimesh(
-                name=f"/hit_pos_{len(hit_pos_handles)}", mesh=hit_pos_mesh
+                name=f"/hit_pos_{len(hit_pos_handles)}",
+                mesh=hit_pos_mesh,
+                position=hit_pos,
             )
             hit_pos_handles.append(hit_pos_handle)
+            return hit_pos_handle
 
         @server.on_scene_click
         def scene_click_cb(message: viser.ScenePointerEvent) -> None:
@@ -84,8 +86,23 @@ def main(mesh_path: str):
             )[0]
             normal = mesh.face_normals[tri_index]
 
-            add_hit_handle(hit_pos, R_world_mesh)
-            add_hit_handle(hit_pos + normal * 0.03, R_world_mesh)
+            hit_pos = R_world_mesh @ hit_pos
+            normal = R_world_mesh @ normal
+
+            add_hit_handle(hit_pos)
+            offset_sphere_handle = add_hit_handle(hit_pos + normal * 0.03)
+            handle = server.add_transform_controls(
+                f"/control",
+                scale=0.05,
+                disable_sliders=True,
+                disable_rotations=True,
+            )
+            handle.position = hit_pos
+
+            @handle.on_update
+            def _(_):
+                # Update the hit position.
+                offset_sphere_handle.position = handle.position
 
     @clear_button_handle.on_click
     def _(_):
