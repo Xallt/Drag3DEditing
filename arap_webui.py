@@ -79,11 +79,6 @@ def main(mesh_path: str):
             hit_pos = hit_pos[hit_pos_idx]
             tri_index = tri_index[hit_pos_idx]
 
-            tri_verts = mesh.vertices[mesh.faces[tri_index]]  # (3, 3)
-
-            barycentric_coords = trimesh.triangles.points_to_barycentric(
-                tri_verts[None], hit_pos[None]
-            )[0]
             normal = mesh.face_normals[tri_index]
 
             hit_pos = R_world_mesh @ hit_pos
@@ -92,7 +87,7 @@ def main(mesh_path: str):
             add_hit_handle(hit_pos)
             offset_sphere_handle = add_hit_handle(hit_pos + normal * 0.03)
             handle = server.add_transform_controls(
-                f"/control",
+                "/control",
                 scale=0.05,
                 disable_sliders=True,
                 disable_rotations=True,
