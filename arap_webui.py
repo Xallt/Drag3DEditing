@@ -18,9 +18,7 @@ def main(mesh_path: str):
 
     mesh = trimesh.load_mesh(mesh_path)
     assert isinstance(mesh, trimesh.Trimesh)
-    print(
-        f"Loaded mesh with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces."
-    )
+    print(f"Loaded mesh with {len(mesh.vertices)} vertices and {len(mesh.faces)} faces.")
 
     # Normalize the mesh to fit in a unit sphere.
     bounding_sphere = mesh.bounding_sphere
@@ -44,12 +42,12 @@ def main(mesh_path: str):
     def _(_):
         add_button_handle.disabled = True
 
-        def add_hit_handle(hit_pos):
+        def add_hit_handle(hit_pos, name):
             # Create a sphere at the hit location.
             hit_pos_mesh = trimesh.creation.icosphere(radius=0.005)
             hit_pos_mesh.visual.vertex_colors = (1.0, 0.0, 0.0, 1.0)  # type: ignore
             hit_pos_handle = server.add_mesh_trimesh(
-                name=f"/hit_pos_{len(hit_pos_handles)}",
+                name=name,
                 mesh=hit_pos_mesh,
                 position=hit_pos,
             )
@@ -84,20 +82,17 @@ def main(mesh_path: str):
             hit_pos = R_world_mesh @ hit_pos
             normal = R_world_mesh @ normal
 
-            add_hit_handle(hit_pos)
-            offset_sphere_handle = add_hit_handle(hit_pos + normal * 0.03)
+            add_hit_handle(hit_pos, f"/hit_pos_{len(hit_pos_handles)}")
             handle = server.add_transform_controls(
-                "/control",
+                f"/control_{len(hit_pos_handles)}",
                 scale=0.05,
                 disable_sliders=True,
                 disable_rotations=True,
             )
-            handle.position = hit_pos
-
-            @handle.on_update
-            def _(_):
-                # Update the hit position.
-                offset_sphere_handle.position = handle.position
+            handle.position = hit_pos + normal * 0.03
+            offset_sphere_handle = add_hit_handle(
+                np.zeros(3), f"/control_{len(hit_pos_handles)}/sphere"
+            )
 
     @clear_button_handle.on_click
     def _(_):
