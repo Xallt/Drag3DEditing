@@ -69,18 +69,6 @@ class DraggingViserUI:
     def on_add_button_click(self, _):
         self.add_button_handle.disabled = True
 
-        def add_hit_handle(hit_pos, name):
-            # Create a sphere at the hit location.
-            hit_pos_mesh = trimesh.creation.icosphere(radius=0.005)
-            hit_pos_mesh.visual.vertex_colors = (1.0, 0.0, 0.0, 1.0)  # type: ignore
-            hit_pos_handle = self.server.add_mesh_trimesh(
-                name=name,
-                mesh=hit_pos_mesh,
-                position=hit_pos,
-            )
-            self.hit_pos_handles.append(hit_pos_handle)
-            return hit_pos_handle
-
         @self.server.on_scene_click
         def scene_click_cb(message: viser.ScenePointerEvent) -> None:
             # Check for intersection with the mesh, using trimesh's ray-mesh intersection.
@@ -109,7 +97,7 @@ class DraggingViserUI:
             hit_pos = R_world_mesh @ hit_pos
             normal = R_world_mesh @ normal
 
-            add_hit_handle(hit_pos, f"/hit_pos_{len(self.hit_pos_handles)}")
+            self.add_hit_handle(hit_pos, f"/hit_pos_{len(self.hit_pos_handles)}")
             handle = self.server.add_transform_controls(
                 f"/control_{len(self.hit_pos_handles)}",
                 scale=0.05,
@@ -117,7 +105,7 @@ class DraggingViserUI:
                 disable_rotations=True,
             )
             handle.position = hit_pos + normal * 0.03
-            add_hit_handle(np.zeros(3), f"/control_{len(self.hit_pos_handles)}/sphere")
+            self.add_hit_handle(np.zeros(3), f"/control_{len(self.hit_pos_handles)}/sphere")
 
 
 def main(mesh_path: str):
