@@ -4,3 +4,6 @@
 [submodule "deps/DragDiffusion"]
 	path = deps/DragDiffusion
 	url = https://github.com/Yujun-Shi/DragDiffusion.git
+[submodule "deps/as-rigid-as-possible"]
+	path = deps/as-rigid-as-possible
+	url = git@github.com:Xallt/as-rigid-as-possible-deformation.git
