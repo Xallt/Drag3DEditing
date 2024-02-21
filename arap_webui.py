@@ -26,10 +26,24 @@ class DraggingControlPointer:
     control: viser.TransformControlsHandle
 
 
+@dataclass
+class FixedControlPointer:
+    hit_pos: np.ndarray
+    tri_index: int
+
+
+@dataclass
+class RayHit:
+    hit_pos: np.ndarray
+    tri_index: int
+    normal: np.ndarray
+
+
 class DraggingViserUI:
     def __init__(self, mesh_path):
         self.server = viser.ViserServer()
 
+        self.mesh_path = mesh_path
         self.mesh = trimesh.load_mesh(mesh_path)
         assert isinstance(self.mesh, trimesh.Trimesh)
         print(
@@ -48,19 +62,27 @@ class DraggingViserUI:
             position=(0.0, 0.0, 0.0),
         )
 
+        self.deformer = Deformer()
+        self.deformer.set_mesh(self.mesh.vertices, self.mesh.faces)
+
         with self.server.add_gui_folder("Handles"):
-            self.add_button_handle = self.server.add_gui_button("Add handle")
+            self.add_drag_handle = self.server.add_gui_button("Add drag handle")
+            self.add_fixed_handle = self.server.add_gui_button("Add fixed point")
             self.clear_button_handle = self.server.add_gui_button("Clear handles")
 
-        self.add_button_handle.on_click(
-            lambda *args, **kwargs: self.on_add_button_click(*args, **kwargs)
+        self.add_drag_handle.on_click(
+            lambda *args, **kwargs: self.on_add_drag_click(*args, **kwargs)
         )
         self.clear_button_handle.on_click(
             lambda *args, **kwargs: self.on_clear_button_handle_click(*args, **kwargs)
         )
+        self.add_fixed_handle.on_click(
+            lambda *args, **kwargs: self.on_add_fixed_click(*args, **kwargs)
+        )
 
         self.hit_pos_handles: List[viser.GlbHandle] = []
         self.hit_pos_controls: List[DraggingControlPointer] = []
+        self.fixed_handles: List[FixedControlPointer] = []
 
         self.drag_button = self.server.add_gui_button("Drag")
 
@@ -68,42 +90,70 @@ class DraggingViserUI:
             lambda *args, **kwargs: self.on_drag_button_click(*args, **kwargs)
         )
 
-    def on_drag_button_click(self, _):
-        deformer = Deformer()
+        with self.server.add_gui_folder("Dragging"):
+            self.stop_deformation_handle = self.server.add_gui_button("Stop deformation")
+            self.reset_dragging_handle = self.server.add_gui_button("Reset")
 
-        deformer.set_mesh(self.mesh.vertices, self.mesh.faces)
+        @self.stop_deformation_handle.on_click
+        def _(_):
+            self.deformer.stop()
+
+        @self.reset_dragging_handle.on_click
+        def _(_):
+            self.deformer.reset()
+
+    def on_add_fixed_click(self, _):
+        self.add_fixed_handle.disabled = True
+
+        @self.server.on_scene_click
+        def scene_click_cb(message: viser.ScenePointerEvent) -> None:
+            ray_hit = self.ray_intersection(message.ray_origin, message.ray_direction)
+            if ray_hit is None:
+                return
+            hit_pos, tri_index = ray_hit.hit_pos, ray_hit.tri_index
+
+            # Successful click => remove callback.
+            self.add_fixed_handle.disabled = False
+            self.server.remove_scene_click_callback(scene_click_cb)
+
+            self.add_hit_handle(
+                hit_pos, f"/fixed_{len(self.hit_pos_handles)}", color=(1.0, 1.0, 0.0)
+            )
+            self.fixed_handles.append(FixedControlPointer(hit_pos, tri_index))
+
+    def on_drag_button_click(self, _):
+        self.deformer.reset()
 
         deformation = np.eye(4)
         deformation[:3, 3] = tf.SO3.from_x_radians(np.pi / 2).inverse().as_matrix() @ (
             self.hit_pos_controls[0].control.position - self.hit_pos_controls[0].hit_pos
         )
-        deformer.set_deformation(deformation)
+        self.deformer.set_deformation(deformation)
+
+        fixed_tri_indices = [control.tri_index for control in self.fixed_handles]
 
         selection = {
-            "selection": [0],
-            "fixed": [],
+            "selection": list(self.mesh.faces[self.hit_pos_controls[0].tri_index]),
+            "fixed": list(set(self.mesh.faces[fixed_tri_indices].reshape(-1))),
         }
-        deformer.set_selection(selection["selection"], selection["fixed"])
+        self.deformer.set_selection(selection["selection"], selection["fixed"])
 
-        deformer.apply_deformation(100)
+        self.deformer.apply_deformation(100)
 
-        self.mesh.vertices = deformer.verts_prime
-        self.mesh_handle = self.server.add_mesh_trimesh(
-            name="/mesh",
-            mesh=self.mesh,
-            wxyz=tf.SO3.from_x_radians(np.pi / 2).wxyz,
-            position=(0.0, 0.0, 0.0),
-        )
+        # vertices will be updated in the update loop
 
     def on_clear_button_handle_click(self, _):
         for handle in self.hit_pos_handles:
             handle.remove()
+        for handle in self.hit_pos_controls:
+            handle.control.remove()
         self.hit_pos_handles.clear()
+        self.hit_pos_controls.clear()
 
-    def add_hit_handle(self, hit_pos, name):
+    def add_hit_handle(self, hit_pos, name, color=(1.0, 0.0, 0.0)):
         # Create a sphere at the hit location.
         hit_pos_mesh = trimesh.creation.icosphere(radius=0.005)
-        hit_pos_mesh.visual.vertex_colors = (1.0, 0.0, 0.0, 1.0)  # type: ignore
+        hit_pos_mesh.visual.vertex_colors = (*color, 1.0)  # type: ignore
         hit_pos_handle = self.server.add_mesh_trimesh(
             name=name,
             mesh=hit_pos_mesh,
@@ -112,36 +162,42 @@ class DraggingViserUI:
         self.hit_pos_handles.append(hit_pos_handle)
         return hit_pos_handle
 
-    def on_add_button_click(self, _):
-        self.add_button_handle.disabled = True
+    def ray_intersection(self, ray_origin, ray_direction):
+        R_world_mesh = tf.SO3(self.mesh_handle.wxyz)
+        R_mesh_world = R_world_mesh.inverse()
+        origin = (R_mesh_world @ np.array(ray_origin)).reshape(1, 3)
+        direction = (R_mesh_world @ np.array(ray_direction)).reshape(1, 3)
+        intersector = trimesh.ray.ray_pyembree.RayMeshIntersector(self.mesh)
+        hit_pos, _, tri_index = intersector.intersects_location(origin, direction)
+
+        if len(hit_pos) == 0:
+            return None
+
+        # Get the first hit position (based on distance from the ray origin).
+        hit_pos_idx = np.argmin(np.linalg.norm(hit_pos - origin, axis=1))
+        hit_pos = hit_pos[hit_pos_idx]
+        tri_index = tri_index[hit_pos_idx]
+        normal = self.mesh.face_normals[tri_index]
+
+        # Transform into world space.
+        hit_pos = R_world_mesh @ hit_pos
+        normal = R_world_mesh @ normal
+
+        return RayHit(hit_pos, tri_index, normal)
+
+    def on_add_drag_click(self, _):
+        self.add_drag_handle.disabled = True
 
         @self.server.on_scene_click
         def scene_click_cb(message: viser.ScenePointerEvent) -> None:
-            # Check for intersection with the mesh, using trimesh's ray-mesh intersection.
-            # Note that mesh is in the mesh frame, so we need to transform the ray.
-            R_world_mesh = tf.SO3(self.mesh_handle.wxyz)
-            R_mesh_world = R_world_mesh.inverse()
-            origin = (R_mesh_world @ np.array(message.ray_origin)).reshape(1, 3)
-            direction = (R_mesh_world @ np.array(message.ray_direction)).reshape(1, 3)
-            intersector = trimesh.ray.ray_pyembree.RayMeshIntersector(self.mesh)
-            hit_pos, _, tri_index = intersector.intersects_location(origin, direction)
-
-            if len(hit_pos) == 0:
+            ray_hit = self.ray_intersection(message.ray_origin, message.ray_direction)
+            if ray_hit is None:
                 return
+            hit_pos, tri_index, normal = ray_hit.hit_pos, ray_hit.tri_index, ray_hit.normal
 
             # Successful click => remove callback.
-            self.add_button_handle.disabled = False
+            self.add_drag_handle.disabled = False
             self.server.remove_scene_click_callback(scene_click_cb)
-
-            # Get the first hit position (based on distance from the ray origin).
-            hit_pos_idx = np.argmin(np.linalg.norm(hit_pos - origin, axis=1))
-            hit_pos = hit_pos[hit_pos_idx]
-            tri_index = tri_index[hit_pos_idx]
-
-            normal = self.mesh.face_normals[tri_index]
-
-            hit_pos = R_world_mesh @ hit_pos
-            normal = R_world_mesh @ normal
 
             self.add_hit_handle(hit_pos, f"/hit_pos_{len(self.hit_pos_handles)}")
             handle = self.server.add_transform_controls(
@@ -154,13 +210,28 @@ class DraggingViserUI:
             self.hit_pos_controls.append(DraggingControlPointer(hit_pos, tri_index, handle))
             self.add_hit_handle(np.zeros(3), f"/control_{len(self.hit_pos_handles)}/sphere")
 
+    def set_vertices(self, vertices):
+        self.mesh.vertices = vertices
+        self.mesh_handle = self.server.add_mesh_trimesh(
+            name="/mesh",
+            mesh=self.mesh,
+            wxyz=tf.SO3.from_x_radians(np.pi / 2).wxyz,
+            position=(0.0, 0.0, 0.0),
+        )
 
-def main(mesh_path: str):
-    dragging_ui = DraggingViserUI(mesh_path)
+    def update(self):
+        if hasattr(self, "deformer") and hasattr(self.deformer, "verts_prime"):
+            if not np.allclose(self.deformer.verts_prime, self.mesh.vertices, atol=1e-5):
+                self.set_vertices(self.deformer.verts_prime)
 
-    while True:
-        time.sleep(10.0)
+    @staticmethod
+    def main(mesh_path: str):
+        dragging_ui = DraggingViserUI(mesh_path)
+
+        while True:
+            time.sleep(0.05)
+            dragging_ui.update()
 
 
 if __name__ == "__main__":
-    tyro.cli(main, description=__doc__)
+    tyro.cli(DraggingViserUI.main, description=__doc__)
