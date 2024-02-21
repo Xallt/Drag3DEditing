@@ -9,9 +9,13 @@ import trimesh.creation
 import trimesh.ray
 import viser
 import viser.transforms as tf
-from argparse import Namespace
 
 import tyro
+
+import sys
+
+sys.path.insert(0, "deps/as-rigid-as-possible")
+from arap import Deformer
 
 
 class DraggingViserUI:
@@ -48,6 +52,38 @@ class DraggingViserUI:
         )
 
         self.hit_pos_handles: List[viser.GlbHandle] = []
+        self.hit_pos_controls: List[viser.TransformControls] = []
+
+        self.drag_button = self.server.add_gui_button("Drag")
+
+        self.drag_button.on_click(
+            lambda *args, **kwargs: self.on_drag_button_click(*args, **kwargs)
+        )
+
+    def on_drag_button_click(self, _):
+        deformer = Deformer()
+
+        deformer.set_mesh(self.mesh.vertices, self.mesh.faces)
+
+        deformation = np.eye(4)
+        deformation[:3, 3] = self.hit_pos_controls[0].position - self.hit_pos_handles[0].position
+        deformer.set_deformation(deformation)
+
+        selection = {
+            "selection": [0],
+            "fixed": [],
+        }
+        deformer.set_selection(selection["selection"], selection["fixed"])
+
+        deformer.apply_deformation(100)
+
+        self.mesh.vertices = deformer.verts_prime
+        self.mesh_handle = self.server.add_mesh_trimesh(
+            name="/mesh",
+            mesh=self.mesh,
+            wxyz=tf.SO3.from_x_radians(np.pi / 2).wxyz,
+            position=(0.0, 0.0, 0.0),
+        )
 
     def on_clear_button_handle_click(self, _):
         for handle in self.hit_pos_handles:
@@ -105,6 +141,7 @@ class DraggingViserUI:
                 disable_rotations=True,
             )
             handle.position = hit_pos + normal * 0.03
+            self.hit_pos_controls.append(handle)
             self.add_hit_handle(np.zeros(3), f"/control_{len(self.hit_pos_handles)}/sphere")
 
 
