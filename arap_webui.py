@@ -238,7 +238,7 @@ class DraggingViserUI:
         dragging_ui = DraggingViserUI(mesh_path)
 
         while True:
-            time.sleep(0.05)
+            time.sleep(0.5)
             dragging_ui.update()
 
 
