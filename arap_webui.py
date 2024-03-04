@@ -10,6 +10,7 @@ import trimesh.ray
 import viser
 import viser.transforms as tf
 from dataclasses import dataclass
+import torch
 
 import tyro
 
@@ -17,6 +18,14 @@ import sys
 
 sys.path.insert(0, "deps/as-rigid-as-possible")
 from arap import Deformer
+
+
+def to_numpy(m):
+    if isinstance(m, np.ndarray):
+        return m
+    if isinstance(m, torch.Tensor):
+        return m.cpu().detach().numpy()
+    raise ValueError(f"Unsupported type: {type(m)}")
 
 
 @dataclass
@@ -221,8 +230,8 @@ class DraggingViserUI:
 
     def update(self):
         if hasattr(self, "deformer") and hasattr(self.deformer, "verts_prime"):
-            if not np.allclose(self.deformer.verts_prime, self.mesh.vertices, atol=1e-5):
-                self.set_vertices(self.deformer.verts_prime)
+            if not np.allclose(to_numpy(self.deformer.verts_prime), self.mesh.vertices, atol=1e-5):
+                self.set_vertices(to_numpy(self.deformer.verts_prime))
 
     @staticmethod
     def main(mesh_path: str):
