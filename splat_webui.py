@@ -331,7 +331,10 @@ class WebUI:
         out_key = self.renderer_output.value
         out_img = output[out_key][0]  # H W C
         if out_key == "masks":
-            out_img = output["masks"][0].to(torch.float32)[..., None].repeat(1, 1, 3)
+            out_img = output[out_key][0].to(torch.float32)[..., None].repeat(1, 1, 3)
+        elif out_key == "depth":
+            out_img = output[out_key][0].to(torch.float32).repeat(1, 1, 3)
+            out_img = (out_img - out_img.min()) / (out_img.max() - out_img.min())
         if out_img.dtype == torch.float32:
             out_img = out_img.clamp(0, 1)
             out_img = (out_img * 255).to(torch.uint8).cpu().to(torch.uint8)
