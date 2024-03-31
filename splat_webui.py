@@ -168,8 +168,9 @@ class WebUI:
                     disable_sliders=True,
                     disable_rotations=True,
                 )
-                handle.position = unprojected_points3d.view(-1).cpu().numpy()
-                self.drag_handles.append(handle)
+                pos = unprojected_points3d.view(-1).cpu().numpy()
+                handle.position = pos.copy()
+                self.drag_handles.append((pos, handle))
 
 
 
@@ -394,13 +395,16 @@ class WebUI:
             c2w, K = self.camera_params(self.viser_cam)
             c2w = c2w
             K = K
-            for handle in self.drag_handles:
-                p = to_homogeneous(handle.position)
+            def proj(c2w, K, p):
+                p = to_homogeneous(p)
                 p = (np.linalg.inv(c2w) @ p)[:3]
                 p = K @ p
                 p = p[:2] / p[2]
-                p = p
-                # print(out_img_np.shape, p)
+                return p
+            for fixed_pos, handle in self.drag_handles:
+                p = proj(c2w, K, fixed_pos)
+                cv2.circle(out_img_np, (int(p[0]), int(p[1])), 5, (255, 255, 0), -1)
+                p = proj(c2w, K, handle.position)
                 cv2.circle(out_img_np, (int(p[0]), int(p[1])), 5, (255, 0, 0), -1)
             out_img = torch.from_numpy(out_img_np).cuda().moveaxis(-1, 0)
 
