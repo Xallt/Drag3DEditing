@@ -158,10 +158,18 @@ class WebUI:
                 depth = self.render_cache["depth"]
                 c2w, K = torch.from_numpy(c2w).to(depth), torch.from_numpy(K).to(depth)
                 unprojected_points3d = unproject(c2w, K, torch.tensor(list(click_pos))[None].to(depth), depth[0, :, :, 0])
-                self.drag_handles.append(unprojected_points3d.view(-1))
 
                 self.add_drag_handle.disabled = False
                 self.server.remove_scene_click_callback(scene_click_cb)
+
+                handle = self.server.add_transform_controls(
+                    f"/control_{len(self.drag_handles)}",
+                    scale=1,
+                    disable_sliders=True,
+                    disable_rotations=True,
+                )
+                handle.position = unprojected_points3d.view(-1).cpu().numpy()
+                self.drag_handles.append(handle)
 
 
 
@@ -384,14 +392,14 @@ class WebUI:
         if len(self.drag_handles) > 0:
             out_img_np = out_img.cpu().moveaxis(0, -1).numpy().copy()
             c2w, K = self.camera_params(self.viser_cam)
-            c2w = torch.from_numpy(c2w).to(self.drag_handles[0])
-            K = torch.from_numpy(K).to(self.drag_handles[0])
+            c2w = c2w
+            K = K
             for handle in self.drag_handles:
-                p = to_homogeneous(handle)
-                p = (c2w.inverse() @ p)[:3]
+                p = to_homogeneous(handle.position)
+                p = (np.linalg.inv(c2w) @ p)[:3]
                 p = K @ p
                 p = p[:2] / p[2]
-                p = p.cpu().numpy()
+                p = p
                 # print(out_img_np.shape, p)
                 cv2.circle(out_img_np, (int(p[0]), int(p[1])), 5, (255, 0, 0), -1)
             out_img = torch.from_numpy(out_img_np).cuda().moveaxis(-1, 0)
