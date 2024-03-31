@@ -29,6 +29,38 @@ import random
 
 import datetime
 
+from utils import unproject, to_homogeneous, fov2focal, focal2fov
+import cv2
+
+def simple_camera_to_c2w_k(cam):
+    cam_pos = - cam.R @ cam.T
+    cam_rot = cam.R
+    width, height = cam.image_width, cam.image_height
+    fy = fov2focal(cam.FoVy, width)
+    fx = fov2focal(cam.FoVx, height)
+    c2w = torch.eye(4, device='cuda')
+    c2w[:3, :3] = torch.from_numpy(cam_rot).to(c2w)
+    c2w[:3, 3] = torch.from_numpy(cam_pos).to(c2w)
+
+    K = torch.tensor([
+        [fx, 0, width / 2],
+        [0, fy, height / 2],
+        [0, 0, 1],
+    ], device='cuda')
+    return c2w, K
+
+def c2w_k_to_simple_camera(c2w, K):
+    width, height = K[:2, 2] * 2
+    cam_pos = c2w[:3, 3]
+    cam_rot = c2w[:3, :3]
+    FoVx = focal2fov(K[0, 0], width)
+    FoVy = focal2fov(K[1, 1], height)
+    cam_R = cam_rot
+    cam_T = - cam_R.T @ cam_pos
+    
+    return Simple_Camera(0, cam_R, cam_T, FoVx, FoVy, height, width, "", 0)
+
+
 class WebUI:
     def __init__(self, cfg) -> None:
         self.gs_source = cfg.gs_source
@@ -36,15 +68,7 @@ class WebUI:
         self.port = 8084
         # training cfg
 
-        self.use_sam = False
-        self.guidance = None
-        self.stop_training = False
-        self.inpaint_end_flag = False
-        self.depth_end_flag = False
-        self.seg_scale = True
-        self.seg_scale_end = False
         # from original system
-        self.points3d = []
         self.gaussian = GaussianModel(
             sh_degree=0,
             anchor_weight_init_g0=1.0,
@@ -60,12 +84,6 @@ class WebUI:
         self.colmap_cameras = None
         self.render_cameras = None
 
-        # diffusion model
-        self.ip2p = None
-        self.ctn_ip2p = None
-
-        self.ctn_inpaint = None
-        self.ctn_ip2p = None
         self.training = False
         if self.colmap_dir is not None:
             scene = CamScene(self.colmap_dir, h=512, w=512)
@@ -86,12 +104,12 @@ class WebUI:
         self.draw_flag = True
         with self.server.add_gui_folder("Render Setting"):
             self.resolution_slider = self.server.add_gui_slider(
-                "Resolution", min=384, max=4096, step=2, initial_value=2048
+                "Resolution", min=384, max=4096, step=2, initial_value=512
             )
 
-            self.FoV_slider = self.server.add_gui_slider(
-                "FoV Scaler", min=0.2, max=2, step=0.1, initial_value=1
-            )
+            # self.FoV_slider = self.server.add_gui_slider(
+            #     "FoV Scaler", min=0.2, max=2, step=0.1, initial_value=1
+            # )
 
             self.fps = self.server.add_gui_text(
                 "FPS", initial_value="-1", disabled=True
@@ -108,8 +126,6 @@ class WebUI:
                 "Show Frame", initial_value=False
             )
 
-
-
         @self.save_button.on_click
         def _(_):
             current_time = datetime.datetime.now()
@@ -122,10 +138,32 @@ class WebUI:
                 frame.visible = self.frame_show.value
             self.server.world_axes.visible = self.frame_show.value
 
-        @self.server.on_scene_click
-        def _(pointer):
-            self.click_cb(pointer)
-        
+
+        with self.server.add_gui_folder("Dragging controls"):
+            self.add_drag_handle = self.server.add_gui_button("Add drag handle")
+            self.add_fixed_handle = self.server.add_gui_button("Add fixed point")
+            self.clear_button_handle = self.server.add_gui_button("Clear handles")
+
+        self.drag_handles = []
+
+        @self.add_drag_handle.on_click
+        def _(_):
+            self.add_drag_handle.disabled = True
+
+            @self.server.on_scene_click
+            def scene_click_cb(message: viser.ScenePointerEvent) -> None:
+                pass
+                click_pos = self.scene_pointer_event_to_click_pos(message)
+                c2w, K = self.camera_params(message.client.camera)
+                depth = self.render_cache["depth"]
+                c2w, K = torch.from_numpy(c2w).to(depth), torch.from_numpy(K).to(depth)
+                unprojected_points3d = unproject(c2w, K, torch.tensor(list(click_pos))[None].to(depth), depth[0, :, :, 0])
+                self.drag_handles.append(unprojected_points3d.view(-1))
+
+                self.add_drag_handle.disabled = False
+                self.server.remove_scene_click_callback(scene_click_cb)
+
+
 
         with torch.no_grad():
             self.frames = []
@@ -136,6 +174,45 @@ class WebUI:
             )
             for i in frame_index:
                 self.make_one_camera_pose_frame(i)
+
+    def camera_params(self, camera):
+        R = tf.SO3(camera.wxyz).as_matrix()
+        T = camera.position
+
+        c2w = np.eye(4)
+        c2w[:3, :3] = R
+        c2w[:3, 3] = T
+
+        width = int(self.resolution_slider.value)
+        height = int(width / self.aspect)
+
+        K = np.array([
+            [camera.fov * width / camera.aspect / 2 , 0, width / 2],
+            [0, camera.fov * height / 2, height / 2],
+            [0, 0, 1]
+        ])
+
+        return c2w, K
+
+
+    def scene_pointer_event_to_click_pos(self, message: viser.ScenePointerEvent):
+        ray_d = np.array(message.ray_direction)
+        camera = message.client.camera
+        c2w, K = self.camera_params(camera)
+
+        ray_d = c2w[:3, :3].T @ ray_d
+        ray_d /= ray_d[2]
+
+        width = int(self.resolution_slider.value)
+        height = int(width / self.aspect)
+
+        x, y = (K @ ray_d)[:2]
+
+        # x, y = ray_d[0] * camera.fov / camera.aspect, ray_d[1] * camera.fov
+        # x, y = int(x * width / 2 + width / 2), int(y * height / 2 + height / 2)
+        x = min(max(x, 0), width - 1)
+        y = min(max(y, 0), height - 1)
+        return x, y
 
     def make_one_camera_pose_frame(self, idx):
         cam = self.colmap_cameras[idx]
@@ -249,29 +326,7 @@ class WebUI:
             self.radii = radii
             self.visibility_filter = self.radii > 0.0
 
-        semantic_map = render(
-            cam,
-            self.gaussian,
-            self.pipe,
-            self.background_tensor,
-            override_color=self.gaussian.mask[..., None].float().repeat(1, 3),
-        )["render"]
-        semantic_map = torch.norm(semantic_map, dim=0)
-        semantic_map = semantic_map > 0.0  # 1, H, W
-        semantic_map_viz = image.detach().clone()  # C, H, W
-        semantic_map_viz = semantic_map_viz.permute(1, 2, 0)  # 3 512 512 to 512 512 3
-        semantic_map_viz[semantic_map] = 0.50 * semantic_map_viz[
-            semantic_map
-        ] + 0.50 * torch.tensor([1.0, 0.0, 0.0], device="cuda")
-        semantic_map_viz = semantic_map_viz.permute(2, 0, 1)  # 512 512 3 to 3 512 512
-
-        render_pkg["sam_masks"] = []
-        render_pkg["point2ds"] = []
-
         self.gaussian.localize = False  # reverse
-
-        render_pkg["semantic"] = semantic_map_viz[None]
-        render_pkg["masks"] = semantic_map[None]  # 1, 1, H, W
 
         image = image.permute(1, 2, 0)[None]  # C H W to 1 H W C
         render_pkg["comp_rgb"] = image  # 1 H W C
@@ -281,9 +336,15 @@ class WebUI:
         render_pkg["depth"] = depth
         render_pkg["opacity"] = depth / (depth.max() + 1e-5)
 
+        self.render_cache = render_pkg
+
         return {
             **render_pkg,
         }
+
+    @property
+    def viser_cam(self):
+        return list(self.server.get_clients().values())[0].camera
 
     @property
     def camera(self):
@@ -295,27 +356,7 @@ class WebUI:
                 self.colmap_dir, h=-1, w=-1, aspect=self.aspect
             ).cameras
             self.begin_call(list(self.server.get_clients().values())[0])
-        viser_cam = list(self.server.get_clients().values())[0].camera
-        # viser_cam.up_direction = tf.SO3(viser_cam.wxyz) @ np.array([0.0, -1.0, 0.0])
-        # viser_cam.look_at = viser_cam.position
-        R = tf.SO3(viser_cam.wxyz).as_matrix()
-        T = -R.T @ viser_cam.position
-        # T = viser_cam.position
-        if self.render_cameras is None:
-            fovy = viser_cam.fov * self.FoV_slider.value
-        else:
-            fovy = self.render_cameras[0].FoVy * self.FoV_slider.value
-
-        fovx = 2 * math.atan(math.tan(fovy / 2) * self.aspect)
-        # fovy = self.render_cameras[0].FoVy
-        # fovx = self.render_cameras[0].FoVx
-        # math.tan(self.render_cameras[0].FoVx / 2) / math.tan(self.render_cameras[0].FoVy / 2)
-        # math.tan(fovx/2) / math.tan(fovy/2)
-
-        # aspect = viser_cam.aspect
-        width = int(self.resolution_slider.value)
-        height = int(width / self.aspect)
-        return Simple_Camera(0, R, T, fovx, fovy, height, width, "", 0)
+        return c2w_k_to_simple_camera(*self.camera_params(self.viser_cam))
 
     def click_cb(self, pointer):
         pass
@@ -339,6 +380,24 @@ class WebUI:
             out_img = out_img.clamp(0, 1)
             out_img = (out_img * 255).to(torch.uint8).cpu().to(torch.uint8)
             out_img = out_img.moveaxis(-1, 0)  # C H W
+
+        if len(self.drag_handles) > 0:
+            out_img_np = out_img.cpu().moveaxis(0, -1).numpy().copy()
+            c2w, K = self.camera_params(self.viser_cam)
+            c2w = torch.from_numpy(c2w).to(self.drag_handles[0])
+            K = torch.from_numpy(K).to(self.drag_handles[0])
+            for handle in self.drag_handles:
+                p = to_homogeneous(handle)
+                p = (c2w.inverse() @ p)[:3]
+                p = K @ p
+                p = p[:2] / p[2]
+                p = p.cpu().numpy()
+                # print(out_img_np.shape, p)
+                cv2.circle(out_img_np, (int(p[0]), int(p[1])), 5, (255, 0, 0), -1)
+            out_img = torch.from_numpy(out_img_np).cuda().moveaxis(-1, 0)
+
+
+
 
         self.renderer_output.options = list(output.keys())
         return out_img.cpu().moveaxis(0, -1).numpy().astype(np.uint8)
