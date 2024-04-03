@@ -126,8 +126,6 @@ class WebUI:
                 "Show Frame", initial_value=False
             )
 
-
-
         @self.save_button.on_click
         def _(_):
             current_time = datetime.datetime.now()
@@ -185,6 +183,17 @@ class WebUI:
             )
             for i in frame_index:
                 self.make_one_camera_pose_frame(i)
+
+        self.reset_up_button = self.server.add_gui_button(
+            "Reset up direction",
+            icon=viser.Icon.ARROW_AUTOFIT_UP,
+            hint="Reset the orbit up direction.",
+        )
+
+        @self.reset_up_button.on_click
+        def _(event: viser.GuiEvent) -> None:
+            assert event.client is not None
+            event.client.camera.up_direction = tf.SO3(event.client.camera.wxyz) @ np.array([0.0, -1.0, 0.0])
 
     def camera_params(self, camera):
         R = tf.SO3(camera.wxyz).as_matrix()
