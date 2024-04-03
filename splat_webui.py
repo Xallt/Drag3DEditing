@@ -29,9 +29,10 @@ import random
 
 import datetime
 
-from utils import unproject, to_homogeneous, fov2focal, focal2fov
 import cv2
+from drag_editing.utils import unproject, to_homogeneous, fov2focal, focal2fov
 from drag_editing.lora_utils import train_lora
+from drag_editing.drag_utils import run_drag
 
 def simple_camera_to_c2w_k(cam):
     cam_pos = - cam.R @ cam.T
@@ -187,6 +188,7 @@ class WebUI:
         with self.server.add_gui_folder("Editing"):
             self.prompt_handle = self.server.add_gui_text("SD Prompt", "")
             self.train_lora_handle = self.server.add_gui_button("Train LoRA")
+            self.dragging_handle = self.server.add_gui_button("Start Dragging")
 
         @self.train_lora_handle.on_click
         def _(_):
@@ -208,6 +210,53 @@ class WebUI:
                 lora_lr,
                 lora_batch_size,
                 lora_rank,
+            )
+
+        @self.dragging_handle.on_click
+        def _(_):
+            start_step = 0
+            start_layer = 10
+            latent_lr = 0.01
+            inversion_strength = 0.7
+            lam = 0.1
+            n_pix_step = 80
+            img = (self.render_cache["comp_rgb"][0].cpu().numpy().copy() * 255).astype(np.uint8)
+            mask = np.ones(img.shape[:2])
+            
+            c2w, K = self.camera_params(self.viser_cam)
+            c2w = c2w
+            K = K
+            def proj(c2w, K, p):
+                p = to_homogeneous(p)
+                p = (np.linalg.inv(c2w) @ p)[:3]
+                p = K @ p
+                p = p[:2] / p[2]
+                return p
+            points = []
+            for fixed_pos, handle in self.drag_handles:
+                p = proj(c2w, K, fixed_pos).astype(np.int32).list()
+                p_target = proj(c2w, K, handle.position).astype(np.int32).list()
+                points.append((p, p_target))
+
+            model_path = "runwayml/stable-diffusion-v1-5"
+            vae_path = "default"
+            lora_path = "./lora_tmp"
+            run_drag(
+                img,
+                img,
+                mask,
+                self.prompt_handle.value,
+                points,
+                inversion_strength,
+                lam,
+                latent_lr,
+                n_pix_step,
+                model_path,
+                vae_path,
+                lora_path,
+                start_step,
+                start_layer,
+                save_dir="./results"
             )
 
 
