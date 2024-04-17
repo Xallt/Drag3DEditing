@@ -207,7 +207,7 @@ class WebUI:
             lora_rank = 16
             imgs = []
             for i, frame in enumerate(tqdm(self.frames)):
-                c2w, K = self.camera_params(self.viser_cam, wxyz=frame.wxyz, position=frame.position)
+                c2w, K = self.camera_params(self.viser_cam, wxyz=frame.wxyz, position=frame.position, resolution=512)
                 simple_camera = c2w_k_to_simple_camera(c2w, K)
                 with torch.no_grad():
                     render_pkg = self.render(simple_camera)
@@ -247,7 +247,7 @@ class WebUI:
         lam = 0.1
         n_pix_step = 80
         for i, frame in enumerate(tqdm(self.frames)):
-            c2w, K = self.camera_params(self.viser_cam, wxyz=frame.wxyz, position=frame.position)
+            c2w, K = self.camera_params(self.viser_cam, wxyz=frame.wxyz, position=frame.position, resolution=512)
             simple_camera = c2w_k_to_simple_camera(c2w, K)
             with torch.no_grad():
                 render_pkg = self.render(simple_camera)
@@ -294,11 +294,13 @@ class WebUI:
                 save_dir=f"./results/{i}"
             )
 
-    def camera_params(self, camera, wxyz=None, position=None):
+    def camera_params(self, camera, wxyz=None, position=None, resolution=None):
         if wxyz is None:
             wxyz = camera.wxyz
         if position is None:
             position = camera.position
+        if resolution is None:
+            resolution = self.resolution_slider.value
         R = tf.SO3(wxyz).as_matrix()
         T = position
 
@@ -306,7 +308,7 @@ class WebUI:
         c2w[:3, :3] = R
         c2w[:3, 3] = T
 
-        width = int(self.resolution_slider.value)
+        width = int(resolution)
         height = int(width / self.aspect)
 
         K = np.array([
