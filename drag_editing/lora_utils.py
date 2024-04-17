@@ -95,7 +95,7 @@ def encode_prompt(text_encoder, input_ids, attention_mask, text_encoder_use_atte
 
     return prompt_embeds
 
-def train_lora(image,
+def train_lora(images,
     prompt,
     model_path,
     vae_path,
@@ -271,9 +271,9 @@ def train_lora(image,
         unet.train()
         image_batch = []
         image_pil_batch = []
-        for _ in range(lora_batch_size):
+        for image_idx in np.random.choice(np.arange(len(images)), lora_batch_size, replace=False):
             # first store pil image
-            image_transformed = image_transforms_pil(Image.fromarray(image))
+            image_transformed = image_transforms_pil(Image.fromarray(images[image_idx]))
             image_pil_batch.append(image_transformed)            
 
             # then store tensor image

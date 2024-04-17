@@ -205,9 +205,15 @@ class WebUI:
             lora_lr = 0.0005
             lora_batch_size = 4
             lora_rank = 16
-            img = (self.render_cache["comp_rgb"][0].cpu().numpy().copy() * 255).astype(np.uint8)
+            imgs = []
+            for i, frame in enumerate(tqdm(self.frames)):
+                c2w, K = self.camera_params(self.viser_cam, wxyz=frame.wxyz, position=frame.position)
+                simple_camera = c2w_k_to_simple_camera(c2w, K)
+                with torch.no_grad():
+                    render_pkg = self.render(simple_camera)
+                imgs.append((render_pkg["comp_rgb"][0].cpu().numpy().copy() * 255).astype(np.uint8))
             train_lora(
-                img,
+                imgs,
                 self.prompt_handle.value,
                 model_path,
                 vae_path,
