@@ -1,2 +1,6 @@
 assets/*
 data
+**/__pycache__
+results
+tmp
+lora_tmp
