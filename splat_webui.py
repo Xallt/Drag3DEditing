@@ -206,11 +206,9 @@ class WebUI:
             lora_batch_size = 4
             lora_rank = 16
             imgs = []
-            for i, frame in enumerate(tqdm(self.frames)):
-                c2w, K = self.camera_params(self.viser_cam, wxyz=frame.wxyz, position=frame.position, resolution=512)
-                simple_camera = c2w_k_to_simple_camera(c2w, K)
+            for cam in self.colmap_cameras:
                 with torch.no_grad():
-                    render_pkg = self.render(simple_camera)
+                    render_pkg = self.render(cam)
                 imgs.append((render_pkg["comp_rgb"][0].cpu().numpy().copy() * 255).astype(np.uint8))
             train_lora(
                 imgs,
@@ -246,11 +244,9 @@ class WebUI:
         inversion_strength = 0.7
         lam = 0.1
         n_pix_step = 80
-        for i, frame in enumerate(tqdm(self.frames)):
-            c2w, K = self.camera_params(self.viser_cam, wxyz=frame.wxyz, position=frame.position, resolution=512)
-            simple_camera = c2w_k_to_simple_camera(c2w, K)
+        for i, cam in enumerate(self.colmap_cameras):
             with torch.no_grad():
-                render_pkg = self.render(simple_camera)
+                render_pkg = self.render(cam)
             img = (render_pkg["comp_rgb"][0].cpu().numpy().copy() * 255).astype(np.uint8)
             mask = np.ones(img.shape[:2])
             
