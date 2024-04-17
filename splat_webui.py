@@ -9,6 +9,7 @@ from typing import Dict, Any
 import viser
 import viser.transforms as tf
 from viser.theme import TitlebarButton, TitlebarConfig, TitlebarImage
+from PIL import Image
 
 from gaussiansplatting.gaussian_renderer import render
 from gaussiansplatting.scene import GaussianModel
@@ -30,9 +31,11 @@ import random
 import datetime
 
 import cv2
-from drag_editing.utils import unproject, to_homogeneous, fov2focal, focal2fov
+from drag_editing.utils import unproject, to_homogeneous, fov2focal, focal2fov, get_points
 from drag_editing.lora_utils import train_lora
 from drag_editing.drag_utils import run_drag
+from tqdm import tqdm
+from pathlib import Path
 
 def simple_camera_to_c2w_k(cam):
     cam_pos = - cam.R @ cam.T
@@ -99,6 +102,9 @@ class WebUI:
 
         self.parser = ArgumentParser(description="Training script parameters")
         self.pipe = PipelineParams(self.parser)
+
+        self.tmp_path = Path("./tmp")
+        self.tmp_path.mkdir(exist_ok=True)
 
 
         self.server = viser.ViserServer(port=self.port)
@@ -214,13 +220,32 @@ class WebUI:
 
         @self.dragging_handle.on_click
         def _(_):
-            start_step = 0
-            start_layer = 10
-            latent_lr = 0.01
-            inversion_strength = 0.7
-            lam = 0.1
-            n_pix_step = 80
-            img = (self.render_cache["comp_rgb"][0].cpu().numpy().copy() * 255).astype(np.uint8)
+            self.precompute_drag_images()
+
+
+        with torch.no_grad():
+            self.frames = []
+            random.seed(0)
+            frame_index = random.sample(
+                range(0, len(self.colmap_cameras)),
+                min(len(self.colmap_cameras), 20),
+            )
+            for i in frame_index:
+                self.make_one_camera_pose_frame(i)
+
+    def precompute_drag_images(self):
+        start_step = 0
+        start_layer = 10
+        latent_lr = 0.01
+        inversion_strength = 0.7
+        lam = 0.1
+        n_pix_step = 80
+        for i, frame in enumerate(tqdm(self.frames)):
+            c2w, K = self.camera_params(self.viser_cam, wxyz=frame.wxyz, position=frame.position)
+            simple_camera = c2w_k_to_simple_camera(c2w, K)
+            with torch.no_grad():
+                render_pkg = self.render(simple_camera)
+            img = (render_pkg["comp_rgb"][0].cpu().numpy().copy() * 255).astype(np.uint8)
             mask = np.ones(img.shape[:2])
             
             c2w, K = self.camera_params(self.viser_cam)
@@ -234,16 +259,20 @@ class WebUI:
                 return p
             points = []
             for fixed_pos, handle in self.drag_handles:
-                p = proj(c2w, K, fixed_pos).astype(np.int32).list()
-                p_target = proj(c2w, K, handle.position).astype(np.int32).list()
-                points.append((p, p_target))
+                p = proj(c2w, K, fixed_pos).astype(np.int32).tolist()
+                p_target = proj(c2w, K, handle.position).astype(np.int32).tolist()
+                points.append(p)
+                points.append(p_target)
+
+            img_with_clicks = get_points(img, points)
+            Image.fromarray(img_with_clicks).save(self.tmp_path / "img_with_clicks.png")
 
             model_path = "runwayml/stable-diffusion-v1-5"
             vae_path = "default"
             lora_path = "./lora_tmp"
-            run_drag(
+            drag_result = run_drag(
                 img,
-                img,
+                img_with_clicks,
                 mask,
                 self.prompt_handle.value,
                 points,
@@ -256,23 +285,16 @@ class WebUI:
                 lora_path,
                 start_step,
                 start_layer,
-                save_dir="./results"
+                save_dir=f"./results/{i}"
             )
 
-
-        with torch.no_grad():
-            self.frames = []
-            random.seed(0)
-            frame_index = random.sample(
-                range(0, len(self.colmap_cameras)),
-                min(len(self.colmap_cameras), 20),
-            )
-            for i in frame_index:
-                self.make_one_camera_pose_frame(i)
-
-    def camera_params(self, camera):
-        R = tf.SO3(camera.wxyz).as_matrix()
-        T = camera.position
+    def camera_params(self, camera, wxyz=None, position=None):
+        if wxyz is None:
+            wxyz = camera.wxyz
+        if position is None:
+            position = camera.position
+        R = tf.SO3(wxyz).as_matrix()
+        T = position
 
         c2w = np.eye(4)
         c2w[:3, :3] = R
@@ -404,7 +426,6 @@ class WebUI:
         self,
         cam,
         local=False,
-        sam=False,
         train=False,
     ) -> Dict[str, Any]:
         self.gaussian.localize = local

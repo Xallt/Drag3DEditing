@@ -1,7 +1,7 @@
 import torch.nn.functional as F
 import torch
 import numpy as np
-
+import cv2
 import math
 
 def fov2focal(fov, pixels):
@@ -33,3 +33,21 @@ def to_homogeneous(v):
     elif type(v) is torch.Tensor:
         v = torch.cat((v, torch.ones((*v.shape[:-1], 1)).to(v.device)), dim=-1)
     return v
+
+def get_points(img,
+               sel_pix):
+    # draw points
+    points = []
+    for idx, point in enumerate(sel_pix):
+        if idx % 2 == 0:
+            # draw a red circle at the handle point
+            cv2.circle(img, tuple(point), 10, (255, 0, 0), -1)
+        else:
+            # draw a blue circle at the handle point
+            cv2.circle(img, tuple(point), 10, (0, 0, 255), -1)
+        points.append(tuple(point))
+        # draw an arrow from handle point to target point
+        if len(points) == 2:
+            cv2.arrowedLine(img, points[0], points[1], (255, 255, 255), 4, tipLength=0.5)
+            points = []
+    return img if isinstance(img, np.ndarray) else np.array(img)
