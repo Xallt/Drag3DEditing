@@ -513,14 +513,12 @@ class WebUI:
                 p = p[:2] / p[2]
                 return p
             for fixed_pos, handle in self.drag_handles:
-                p = proj(c2w, K, fixed_pos)
-                cv2.circle(out_img_np, (int(p[0]), int(p[1])), 5, (255, 255, 0), -1)
-                p = proj(c2w, K, handle.position)
-                cv2.circle(out_img_np, (int(p[0]), int(p[1])), 5, (255, 0, 0), -1)
+                p0 = proj(c2w, K, fixed_pos)
+                cv2.circle(out_img_np, (int(p0[0]), int(p0[1])), 5, (255, 255, 0), -1)
+                p1 = proj(c2w, K, handle.position)
+                cv2.circle(out_img_np, (int(p1[0]), int(p1[1])), 5, (255, 0, 0), -1)
+                cv2.arrowedLine(out_img_np, (int(p0[0]), int(p0[1])), (int(p1[0]), int(p1[1])), (255, 255, 255), 2, tipLength=0.2)
             out_img = torch.from_numpy(out_img_np).cuda().moveaxis(-1, 0)
-
-
-
 
         self.renderer_output.options = list(output.keys())
         return out_img.cpu().moveaxis(0, -1).numpy().astype(np.uint8)
