@@ -7,7 +7,6 @@
 from PIL import Image
 import os
 import numpy as np
-from einops import rearrange
 import torch
 import torch.nn.functional as F
 from torchvision import transforms
@@ -17,16 +16,12 @@ from PIL import Image
 
 from transformers import AutoTokenizer, PretrainedConfig
 
-import diffusers
 from diffusers import (
     AutoencoderKL,
     DDPMScheduler,
-    DiffusionPipeline,
-    DPMSolverMultistepScheduler,
-    StableDiffusionPipeline,
     UNet2DConditionModel,
 )
-from diffusers.loaders import AttnProcsLayers, LoraLoaderMixin
+from diffusers.loaders import LoraLoaderMixin
 from diffusers.models.attention_processor import (
     AttnAddedKVProcessor,
     AttnAddedKVProcessor2_0,
@@ -35,8 +30,6 @@ from diffusers.models.attention_processor import (
 from diffusers.models.lora import LoRALinearLayer
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import unet_lora_state_dict
-from diffusers.utils import check_min_version, is_wandb_available
-from diffusers.utils.import_utils import is_xformers_available
 
 from tqdm.auto import tqdm
 
@@ -134,13 +127,6 @@ def train_lora(images,
     unet = UNet2DConditionModel.from_pretrained(
         model_path, subfolder="unet", revision=None
     )
-    pipeline = StableDiffusionPipeline.from_pretrained(
-                    pretrained_model_name_or_path=model_path,
-                    vae=vae,
-                    unet=unet,
-                    text_encoder=text_encoder,
-                    scheduler=noise_scheduler,
-                    torch_dtype=torch.float16)
 
     # set device and dtype
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -345,5 +331,3 @@ def train_lora(images,
         unet_lora_layers=unet_lora_layers,
         text_encoder_lora_layers=None,
     )
-
-    return

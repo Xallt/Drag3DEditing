@@ -3,7 +3,6 @@ sys.path.insert(0, "deps/GaussianEditor")
 import time
 import numpy as np
 import torch
-from gaussiansplatting.scene.cameras import Simple_Camera
 from typing import Dict, Any
 
 import viser
@@ -31,39 +30,12 @@ import random
 import datetime
 
 import cv2
-from drag_editing.utils import unproject, to_homogeneous, fov2focal, focal2fov, get_points
+from drag_editing.utils import unproject, to_homogeneous, get_points, c2w_k_to_simple_camera
 from drag_editing.lora_utils import train_lora
 from drag_editing.drag_utils import run_drag
 from tqdm import tqdm
 from pathlib import Path
 
-def simple_camera_to_c2w_k(cam):
-    cam_pos = - cam.R @ cam.T
-    cam_rot = cam.R
-    width, height = cam.image_width, cam.image_height
-    fy = fov2focal(cam.FoVy, width)
-    fx = fov2focal(cam.FoVx, height)
-    c2w = torch.eye(4, device='cuda')
-    c2w[:3, :3] = torch.from_numpy(cam_rot).to(c2w)
-    c2w[:3, 3] = torch.from_numpy(cam_pos).to(c2w)
-
-    K = torch.tensor([
-        [fx, 0, width / 2],
-        [0, fy, height / 2],
-        [0, 0, 1],
-    ], device='cuda')
-    return c2w, K
-
-def c2w_k_to_simple_camera(c2w, K):
-    width, height = K[:2, 2] * 2
-    cam_pos = c2w[:3, 3]
-    cam_rot = c2w[:3, :3]
-    FoVx = focal2fov(K[0, 0], width)
-    FoVy = focal2fov(K[1, 1], height)
-    cam_R = cam_rot
-    cam_T = - cam_R.T @ cam_pos
-    
-    return Simple_Camera(0, cam_R, cam_T, FoVx, FoVy, height, width, "", 0)
 
 
 class WebUI:
