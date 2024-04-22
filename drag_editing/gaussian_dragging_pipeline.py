@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(0, "deps/DragDiffusion")
 import torch
 from diffusers import DDIMScheduler, AutoencoderKL
 from drag_pipeline import DragPipeline
@@ -9,10 +11,11 @@ from gaussiansplatting.gaussian_renderer import render
 import numpy as np
 from drag_editing.lora_utils import train_lora
 from drag_editing.drag_utils import drag_diffusion_update
+from drag_editing.utils import to_homogeneous, simple_camera_to_c2w_k
 import torch.nn.functional as F
 from utils.attn_utils import register_attention_editor_diffusers, MutualSelfAttentionControl
 from copy import deepcopy
-from drag_editing.utils import to_homogeneous, simple_camera_to_c2w_k
+from tqdm import tqdm
 
 
 class GaussianDraggingPipeline:
@@ -66,11 +69,11 @@ class GaussianDraggingPipeline:
     def initialize(self, prompt):
         self.prompt = prompt
         self.renders = []
-        for cam_idx in range(len(self.cameras)):
+        for cam_idx in tqdm(range(len(self.cameras))):
             camera = self.cameras[cam_idx]
             # Obtain source image from gaussians
             with torch.no_grad():
-                render_pkg = render(camera, self.gaussian, self.pipe, self.background_tensor)
+                render_pkg = render(camera, self.gaussians, self.pipe, self.background_tensor)
 
             self.renders.append(render_pkg)
 
@@ -78,35 +81,42 @@ class GaussianDraggingPipeline:
         assert getattr(self, "prompt", None) is not None, "Please set prompt first"
 
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        scheduler = DDIMScheduler(
-            beta_start=0.00085,
-            beta_end=0.012,
-            beta_schedule="scaled_linear",
-            clip_sample=False,
-            set_alpha_to_one=False,
-            steps_offset=1,
-        )
-        self.model = DragPipeline.from_pretrained(
-            self.model_path, scheduler=scheduler, torch_dtype=torch.float16
-        )
-        # call this function to override unet forward function,
-        # so that intermediate features are returned after forward
-        self.model.modify_unet_forward()
-
-        # set vae
-        if self.vae_path != "default":
-            self.model.vae = AutoencoderKL.from_pretrained(self.vae_path).to(
-                self.model.vae.device, self.model.vae.dtype
+        if not hasattr(self, 'model'):
+            scheduler = DDIMScheduler(
+                beta_start=0.00085,
+                beta_end=0.012,
+                beta_schedule="scaled_linear",
+                clip_sample=False,
+                set_alpha_to_one=False,
+                steps_offset=1,
             )
+            self.model = DragPipeline.from_pretrained(
+                self.model_path, scheduler=scheduler, torch_dtype=torch.float16
+            ).to(self.device)
+            # call this function to override unet forward function,
+            # so that intermediate features are returned after forward
+            self.model.modify_unet_forward()
 
-        # obtain text embeddings
+            # set vae
+            if self.vae_path != "default":
+                self.model.vae = AutoencoderKL.from_pretrained(self.vae_path).to(
+                    self.model.vae.device, self.model.vae.dtype
+                )
+
+            # set lora
+            if self.lora_path == "":
+                print("applying default parameters")
+                self.model.unet.set_default_attn_processor()
+            else:
+                print("applying lora: " + self.lora_path)
+                self.model.unet.load_attn_procs(self.lora_path)
+            # obtain text embeddings
+
+            # off load model to cpu, which save some memory.
+            self.model.enable_model_cpu_offload()
+
         text_embeddings = self.model.get_text_embeddings(self.prompt)
-
-        # off load model to cpu, which save some memory.
-        self.model.enable_model_cpu_offload()
-
         self.inverted_codes = []
-        self.renders = []
 
         self.args = SimpleNamespace()
         self.args.n_inference_step = 50
@@ -122,23 +132,13 @@ class GaussianDraggingPipeline:
         self.args.lr = self.latent_lr
         self.args.n_pix_step = self.n_pix_step
 
-        for cam_idx in range(len(self.cameras)):
+        for cam_idx in tqdm(range(len(self.cameras))):
             # initialize parameters
             seed_everything(42)
 
             # Obtain source image from gaussians
-            source_image = self.renders[cam_idx]["render"].moveaxis(0, -1)
-
-            source_image = self.preprocess_image(source_image, self.device, dtype=torch.float16)
-
-
-            # set lora
-            if self.lora_path == "":
-                print("applying default parameters")
-                self.model.unet.set_default_attn_processor()
-            else:
-                print("applying lora: " + self.lora_path)
-                self.model.unet.load_attn_procs(self.lora_path)
+            source_image = self.renders[cam_idx]["render"][None] * 2 - 1
+            source_image = source_image.to(torch.float16)
 
             # invert the source image
             # the latent code resolution is too small, only 64*64
