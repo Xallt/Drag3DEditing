@@ -131,10 +131,10 @@ class GaussianDraggingPipeline:
 
         self.args.lr = self.latent_lr
         self.args.n_pix_step = self.n_pix_step
+        seed_everything(42)
 
         for cam_idx in tqdm(range(len(self.cameras))):
             # initialize parameters
-            seed_everything(42)
 
             # Obtain source image from gaussians
             source_image = self.renders[cam_idx]["render"][None] * 2 - 1
