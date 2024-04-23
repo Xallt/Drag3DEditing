@@ -8,6 +8,7 @@ from pytorch_lightning import seed_everything
 from types import SimpleNamespace
 from argparse import ArgumentParser
 from gaussiansplatting.arguments import PipelineParams
+from gaussiansplatting.arguments import OptimizationParams
 from gaussiansplatting.gaussian_renderer import render
 import numpy as np
 from drag_editing.lora_utils import train_lora
@@ -78,9 +79,6 @@ class GaussianDraggingPipeline:
 
             self.renders.append(render_pkg)
 
-    def initialize_dragging(self):
-        assert getattr(self, "prompt", None) is not None, "Please set prompt first"
-
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         if not hasattr(self, "model"):
             scheduler = DDIMScheduler(
@@ -116,7 +114,7 @@ class GaussianDraggingPipeline:
             # off load model to cpu, which save some memory.
             self.model.enable_model_cpu_offload()
 
-        text_embeddings = self.model.get_text_embeddings(self.prompt)
+        self.text_embeddings = self.model.get_text_embeddings(self.prompt)
 
         self.args = SimpleNamespace()
         self.args.n_inference_step = 50
@@ -134,42 +132,31 @@ class GaussianDraggingPipeline:
         self.args.lr = self.latent_lr
         self.args.n_pix_step = self.n_pix_step
 
-        if not hasattr(self, "inverted_codes"):
-            self.inverted_codes = []
-
-            seed_everything(42)
-
-            for cam_idx in tqdm(range(len(self.cameras))):
-                # initialize parameters
-
-                # Obtain source image from gaussians
-                source_image = self.renders[cam_idx]["render"][None] * 2 - 1
-                source_image = source_image.to(torch.float16)
-
-                # invert the source image
-                # the latent code resolution is too small, only 64*64
-                invert_code = self.model.invert(
-                    source_image,
-                    self.prompt,
-                    encoder_hidden_states=text_embeddings,
-                    guidance_scale=self.args.guidance_scale,
-                    num_inference_steps=self.args.n_inference_step,
-                    num_actual_inference_steps=self.args.n_actual_inference_step,
-                )
-                self.inverted_codes.append(invert_code)
-
-                # empty cache to save memory
-                torch.cuda.empty_cache()
-
         self.model.scheduler.set_timesteps(self.args.n_inference_step)
         self.t = self.model.scheduler.timesteps[
             self.args.n_inference_step - self.args.n_actual_inference_step
         ]
 
-        # feature shape: [1280,16,16], [1280,32,32], [640,64,64], [320,64,64]
-        # convert dtype to float for optimization
-        self.text_embeddings = text_embeddings.float()
-        self.model.unet = self.model.unet.float()
+    def get_image(self, cam_idx):
+        render_pkg = render(self.cameras[cam_idx], self.gaussians, self.pipe, self.background_tensor)
+        return render_pkg["render"] # [3, H, W]
+
+    def get_init_code(self, cam_idx):
+        rgb = self.get_image(cam_idx)
+        source_image = rgb[None] * 2 - 1
+        source_image = source_image.to(torch.float16)
+
+        # invert the source image
+        # the latent code resolution is too small, only 64*64
+        invert_code = self.model.invert(
+            source_image,
+            self.prompt,
+            encoder_hidden_states=self.text_embeddings,
+            guidance_scale=self.args.guidance_scale,
+            num_inference_steps=self.args.n_inference_step,
+            num_actual_inference_steps=self.args.n_actual_inference_step,
+        )
+        return invert_code
 
     def train_lora(self):
         assert getattr(self, "prompt", None) is not None, "Please set prompt first"
@@ -189,17 +176,19 @@ class GaussianDraggingPipeline:
             self.lora_batch_size,
             self.lora_rank,
         )
+    def proj(c2w, K, p):
+        p = to_homogeneous(p)
+        p = (p @ c2w.inverse().T)[..., :3]
+        p = p @ K.T
+        p = p[..., :2] / p[..., 2]
+        return p
 
     def drag(self, handle_points_3d, target_points_3d):
         for cam_idx in range(len(self.cameras)):
             camera = self.cameras[cam_idx]
-            invert_code = self.inverted_codes[cam_idx]
-            init_code = invert_code
-            init_code_orig = deepcopy(init_code)
 
             # feature shape: [1280,16,16], [1280,32,32], [640,64,64], [320,64,64]
             # convert dtype to float for optimization
-            init_code = init_code.float()
             text_embeddings = self.text_embeddings.float()
             self.model.unet = self.model.unet.float()
 
@@ -212,21 +201,14 @@ class GaussianDraggingPipeline:
             sup_res_w = int(0.5 * camera.image_width)
             mask = F.interpolate(mask, (sup_res_h, sup_res_w), mode="nearest")
 
-            def proj(c2w, K, p):
-                p = to_homogeneous(p)
-                p = (p @ c2w.inverse().T)[..., :3]
-                p = p @ K.T
-                p = p[..., :2] / p[..., 2]
-                return p
 
             c2w, K = simple_camera_to_c2w_k(camera)
             handle_points, target_points = (
-                proj(c2w, K, handle_points_3d),
-                proj(c2w, K, target_points_3d),
+                self.proj(c2w, K, handle_points_3d),
+                self.proj(c2w, K, target_points_3d),
             )
             updated_init_code = self.drag_diffusion_update(
                 self.model,
-                init_code,
                 self.text_embeddings,
                 self.t,
                 handle_points,
@@ -237,9 +219,9 @@ class GaussianDraggingPipeline:
                 sup_res_w
             )
 
-            updated_init_code = updated_init_code.half()
-            text_embeddings = text_embeddings.half()
-            self.model.unet = self.model.unet.half()
+            # updated_init_code = updated_init_code.half()
+            # text_embeddings = text_embeddings.half()
+            # self.model.unet = self.model.unet.half()
 
             # hijack the attention module
             # inject the reference branch to guide the generation
@@ -321,8 +303,13 @@ class GaussianDraggingPipeline:
 
         return Ia * wa + Ib * wb + Ic * wc + Id * wd
 
+    def get_optimizer(self):
+        opt_config = OptimizationParams()
+        self.gaussians.training_setup(opt_config)
+        return self.gaussians.optimizer
+
     def drag_diffusion_update(
-        self, model, init_code, text_embeddings, t, handle_points, target_points, mask, args, sup_res_h, sup_res_w
+        self, model, text_embeddings, t, handle_points_3d, target_points_3d, mask, args, sup_res_h, sup_res_w
     ):
         assert len(handle_points) == len(
             target_points
@@ -330,32 +317,45 @@ class GaussianDraggingPipeline:
         if text_embeddings is None:
             text_embeddings = model.get_text_embeddings(args.prompt)
 
-        # the init output feature of unet
-        with torch.no_grad():
-            unet_output, F0 = model.forward_unet_features(
-                init_code,
-                t,
-                encoder_hidden_states=text_embeddings,
-                layer_idx=args.unet_feature_idx,
-                interp_res_h=sup_res_h,
-                interp_res_w=sup_res_w,
-            )
-            x_prev_0, _ = model.step(unet_output, t, init_code)
-            # init_code_orig = copy.deepcopy(init_code)
+        
+        self.init_codes = []
+        self.unet_outputs = []
+        self.F0s = []
+        self.x_prev_0s = []
+        self.handle_points_inits = []
+        for cam_idx in range(len(self.cameras)):
+            # the init output feature of unet
+            with torch.no_grad():
+                init_code = self.get_init_code(cam_idx)
+                unet_output, F0 = model.forward_unet_features(
+                    init_code,
+                    t,
+                    encoder_hidden_states=text_embeddings,
+                    layer_idx=args.unet_feature_idx,
+                    interp_res_h=sup_res_h,
+                    interp_res_w=sup_res_w,
+                )
+                x_prev_0, _ = model.step(unet_output, t, init_code)
+                c2w, K = simple_camera_to_c2w_k(self.cameras[cam_idx])
+                handle_points = self.proj(c2w, K, handle_points_3d)
+                self.handle_points_inits.append(handle_points)
+                self.unet_outputs.append(unet_output)
+                self.F0s.append(F0)
+                self.x_prev_0s.append(x_prev_0)
+                self.init_codes.append(init_code)
 
-        # prepare optimizable init_code and optimizer
-        init_code.requires_grad_(True)
-        optimizer = torch.optim.Adam([init_code], lr=args.lr)
+        optimizer = self.get_optimizer()
 
         # prepare for point tracking and background regularization
-        handle_points_init = deepcopy(handle_points)
         interp_mask = F.interpolate(mask, (init_code.shape[2], init_code.shape[3]), mode="nearest")
         using_mask = interp_mask.sum() != 0.0
 
         # prepare amp scaler for mixed-precision training
         scaler = torch.cuda.amp.GradScaler()
         for step_idx in range(args.n_pix_step):
+            cam_idx = torch.random.randint(0, len(self.cameras))
             with torch.autocast(device_type="cuda", dtype=torch.float16):
+                init_code = self.init_codes[cam_idx]
                 unet_output, F1 = model.forward_unet_features(
                     init_code,
                     t,
@@ -364,12 +364,17 @@ class GaussianDraggingPipeline:
                     interp_res_h=sup_res_h,
                     interp_res_w=sup_res_w,
                 )
-                x_prev_updated, _ = model.step(unet_output, t, init_code)
+                x_prev_updated, _ = model.step(self.unet_outputs[cam_idx], t, init_code)
 
                 # do point tracking to update handle points before computing motion supervision loss
+                c2w, K = simple_camera_to_c2w_k(self.cameras[cam_idx])
+                handle_points, target_points = (
+                    self.proj(c2w, K, handle_points_3d),
+                    self.proj(c2w, K, target_points_3d),
+                )
                 if step_idx != 0:
                     handle_points = self.point_tracking(
-                        F0, F1, handle_points, handle_points_init, args
+                        self.F0s[cam_idx], F1, handle_points, self.handle_points_inits[cam_idx], args
                     )
                     print("new handle points", handle_points)
 
