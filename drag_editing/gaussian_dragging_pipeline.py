@@ -90,7 +90,7 @@ class GaussianDraggingPipeline:
                 steps_offset=1,
             )
             self.model = DragPipeline.from_pretrained(
-                self.model_path, scheduler=scheduler, torch_dtype=torch.float16
+                self.model_path, scheduler=scheduler, torch_dtype=torch.float32
             ).to(self.device)
             # call this function to override unet forward function,
             # so that intermediate features are returned after forward
@@ -141,10 +141,11 @@ class GaussianDraggingPipeline:
         render_pkg = render(self.cameras[cam_idx], self.gaussians, self.pipe, self.background_tensor)
         return render_pkg["render"] # [3, H, W]
 
-    def get_init_code(self, cam_idx):
-        rgb = self.get_image(cam_idx)
+    def get_init_code(self, cam_idx, rgb=None):
+        if rgb is None:
+            rgb = self.get_image(cam_idx)
         source_image = rgb[None] * 2 - 1
-        source_image = source_image.to(torch.float16)
+        source_image = source_image.to(torch.float32)
 
         # invert the source image
         # the latent code resolution is too small, only 64*64
@@ -176,48 +177,40 @@ class GaussianDraggingPipeline:
             self.lora_batch_size,
             self.lora_rank,
         )
-    def proj(c2w, K, p):
+    def proj(self, c2w, K, p):
         p = to_homogeneous(p)
         p = (p @ c2w.inverse().T)[..., :3]
         p = p @ K.T
         p = p[..., :2] / p[..., 2]
         return p
 
-    def drag(self, handle_points_3d, target_points_3d):
-        for cam_idx in range(len(self.cameras)):
-            camera = self.cameras[cam_idx]
+    def drag_old(self, handle_points_3d, target_points_3d):
+        pass
+        # for cam_idx in range(len(self.cameras)):
+            # camera = self.cameras[cam_idx]
 
-            # feature shape: [1280,16,16], [1280,32,32], [640,64,64], [320,64,64]
-            # convert dtype to float for optimization
-            text_embeddings = self.text_embeddings.float()
-            self.model.unet = self.model.unet.float()
+            # # feature shape: [1280,16,16], [1280,32,32], [640,64,64], [320,64,64]
+            # # convert dtype to float for optimization
+            # self.model.unet = self.model.unet.float()
 
-            # preparing editing meta data (handle, target, mask)
-            mask = np.ones((camera.image_height, camera.image_width))
-            mask = torch.from_numpy(mask).float() / 255.0
-            mask[mask > 0.0] = 1.0
-            mask = mask[None, None].cuda()
-            sup_res_h = int(0.5 * camera.image_height)
-            sup_res_w = int(0.5 * camera.image_width)
-            mask = F.interpolate(mask, (sup_res_h, sup_res_w), mode="nearest")
+            # # preparing editing meta data (handle, target, mask)
+            # mask = np.ones((camera.image_height, camera.image_width))
+            # mask = torch.from_numpy(mask).float() / 255.0
+            # mask[mask > 0.0] = 1.0
+            # mask = mask[None, None].cuda()
+            # sup_res_h = int(0.5 * camera.image_height)
+            # sup_res_w = int(0.5 * camera.image_width)
+            # mask = F.interpolate(mask, (sup_res_h, sup_res_w), mode="nearest")
 
 
-            c2w, K = simple_camera_to_c2w_k(camera)
-            handle_points, target_points = (
-                self.proj(c2w, K, handle_points_3d),
-                self.proj(c2w, K, target_points_3d),
-            )
-            updated_init_code = self.drag_diffusion_update(
-                self.model,
-                self.text_embeddings,
-                self.t,
-                handle_points,
-                target_points,
-                mask,
-                self.args,
-                sup_res_h,
-                sup_res_w
-            )
+            # self.drag_diffusion_update(
+            #     handle_points_3d,
+            #     target_points_3d,
+            #     mask,
+            #     self.args,
+            #     sup_res_h,
+            #     sup_res_w
+            # )
 
             # updated_init_code = updated_init_code.half()
             # text_embeddings = text_embeddings.half()
@@ -225,37 +218,37 @@ class GaussianDraggingPipeline:
 
             # hijack the attention module
             # inject the reference branch to guide the generation
-            editor = MutualSelfAttentionControl(
-                start_step=self.start_step,
-                start_layer=self.start_layer,
-                total_steps=self.n_inference_step,
-                guidance_scale=self.guidance_scale,
-            )
-            if self.lora_path == "":
-                register_attention_editor_diffusers(self.model, editor, attn_processor="attn_proc")
-            else:
-                register_attention_editor_diffusers(
-                    self.model, editor, attn_processor="lora_attn_proc"
-                )
+            # editor = MutualSelfAttentionControl(
+            #     start_step=self.start_step,
+            #     start_layer=self.start_layer,
+            #     total_steps=self.n_inference_step,
+            #     guidance_scale=self.guidance_scale,
+            # )
+            # if self.lora_path == "":
+            #     register_attention_editor_diffusers(self.model, editor, attn_processor="attn_proc")
+            # else:
+            #     register_attention_editor_diffusers(
+            #         self.model, editor, attn_processor="lora_attn_proc"
+            #     )
 
-            # inference the synthesized image
-            gen_image = self.model(
-                prompt=self.prompt,
-                encoder_hidden_states=torch.cat([text_embeddings] * 2, dim=0),
-                batch_size=2,
-                latents=torch.cat([init_code_orig, updated_init_code], dim=0),
-                guidance_scale=self.args.guidance_scale,
-                num_inference_steps=self.args.n_inference_step,
-                num_actual_inference_steps=self.args.n_actual_inference_step,
-            )[1].unsqueeze(dim=0)
+            # # inference the synthesized image
+            # gen_image = self.model(
+            #     prompt=self.prompt,
+            #     encoder_hidden_states=torch.cat([text_embeddings] * 2, dim=0),
+            #     batch_size=2,
+            #     latents=torch.cat([init_code_orig, updated_init_code], dim=0),
+            #     guidance_scale=self.args.guidance_scale,
+            #     num_inference_steps=self.args.n_inference_step,
+            #     num_actual_inference_steps=self.args.n_actual_inference_step,
+            # )[1].unsqueeze(dim=0)
 
-            # resize gen_image into the size of source_image
-            # we do this because shape of gen_image will be rounded to multipliers of 8
-            gen_image = F.interpolate(gen_image, (camera.image_height, camera.image_width), mode="bilinear")
+            # # resize gen_image into the size of source_image
+            # # we do this because shape of gen_image will be rounded to multipliers of 8
+            # gen_image = F.interpolate(gen_image, (camera.image_height, camera.image_width), mode="bilinear")
 
-            out_image = gen_image.cpu().permute(0, 2, 3, 1).numpy()[0]
-            out_image = (out_image * 255).astype(np.uint8)
-            return out_image
+            # out_image = gen_image.cpu().permute(0, 2, 3, 1).numpy()[0]
+            # out_image = (out_image * 255).astype(np.uint8)
+            # return out_image
 
     def point_tracking(self, F0, F1, handle_points, handle_points_init, args):
         with torch.no_grad():
@@ -308,14 +301,12 @@ class GaussianDraggingPipeline:
         self.gaussians.training_setup(opt_config)
         return self.gaussians.optimizer
 
-    def drag_diffusion_update(
-        self, model, text_embeddings, t, handle_points_3d, target_points_3d, mask, args, sup_res_h, sup_res_w
+    def drag(
+        self, handle_points_3d, target_points_3d
     ):
-        assert len(handle_points) == len(
-            target_points
+        assert len(handle_points_3d) == len(
+            target_points_3d
         ), "number of handle point must equals target points"
-        if text_embeddings is None:
-            text_embeddings = model.get_text_embeddings(args.prompt)
 
         
         self.init_codes = []
@@ -323,59 +314,70 @@ class GaussianDraggingPipeline:
         self.F0s = []
         self.x_prev_0s = []
         self.handle_points_inits = []
+        self.target_points = []
+        self.interp_masks = []
+        using_mask = False
         for cam_idx in range(len(self.cameras)):
+            camera = self.cameras[cam_idx]
+            sup_res_h = int(0.5 * camera.image_height)
+            sup_res_w = int(0.5 * camera.image_width)
             # the init output feature of unet
             with torch.no_grad():
-                init_code = self.get_init_code(cam_idx)
-                unet_output, F0 = model.forward_unet_features(
+                rgb = self.get_image(cam_idx)
+                mask = torch.ones(rgb.shape[:2]).to(rgb) # TODO: mask
+                init_code = self.get_init_code(cam_idx, rgb=rgb)
+                unet_output, F0 = self.model.forward_unet_features(
                     init_code,
-                    t,
-                    encoder_hidden_states=text_embeddings,
-                    layer_idx=args.unet_feature_idx,
+                    self.t,
+                    encoder_hidden_states=self.text_embeddings,
+                    layer_idx=self.args.unet_feature_idx,
                     interp_res_h=sup_res_h,
                     interp_res_w=sup_res_w,
                 )
-                x_prev_0, _ = model.step(unet_output, t, init_code)
+                x_prev_0, _ = self.model.step(unet_output, self.t, init_code)
                 c2w, K = simple_camera_to_c2w_k(self.cameras[cam_idx])
                 handle_points = self.proj(c2w, K, handle_points_3d)
+                target_points = self.proj(c2w, K, target_points_3d)
                 self.handle_points_inits.append(handle_points)
+                self.target_points.append(target_points)
                 self.unet_outputs.append(unet_output)
                 self.F0s.append(F0)
                 self.x_prev_0s.append(x_prev_0)
-                self.init_codes.append(init_code)
+                interp_mask = F.interpolate(mask[None, None], (init_code.shape[2], init_code.shape[3]), mode="nearest")[0, 0]
+                self.interp_masks.append(interp_mask)
+                using_mask = using_mask or interp_mask.sum() != 0.0
+
 
         optimizer = self.get_optimizer()
 
-        # prepare for point tracking and background regularization
-        interp_mask = F.interpolate(mask, (init_code.shape[2], init_code.shape[3]), mode="nearest")
-        using_mask = interp_mask.sum() != 0.0
-
         # prepare amp scaler for mixed-precision training
         scaler = torch.cuda.amp.GradScaler()
-        for step_idx in range(args.n_pix_step):
+        for step_idx in tqdm(range(self.args.n_pix_step)):
             cam_idx = torch.random.randint(0, len(self.cameras))
-            with torch.autocast(device_type="cuda", dtype=torch.float16):
-                init_code = self.init_codes[cam_idx]
-                unet_output, F1 = model.forward_unet_features(
+            camera = self.cameras[cam_idx]
+            sup_res_h = int(0.5 * camera.image_height)
+            sup_res_w = int(0.5 * camera.image_width)
+
+            with torch.autocast(device_type="cuda", dtype=torch.float32):
+                init_code = self.get_init_code(cam_idx)
+                unet_output, F1 = self.model.forward_unet_features(
                     init_code,
-                    t,
-                    encoder_hidden_states=text_embeddings,
-                    layer_idx=args.unet_feature_idx,
+                    self.t,
+                    encoder_hidden_states=self.text_embeddings,
+                    layer_idx=self.args.unet_feature_idx,
                     interp_res_h=sup_res_h,
                     interp_res_w=sup_res_w,
                 )
-                x_prev_updated, _ = model.step(self.unet_outputs[cam_idx], t, init_code)
+                x_prev_updated, _ = self.model.step(self.unet_outputs[cam_idx], self.t, init_code)
 
                 # do point tracking to update handle points before computing motion supervision loss
                 c2w, K = simple_camera_to_c2w_k(self.cameras[cam_idx])
-                handle_points, target_points = (
-                    self.proj(c2w, K, handle_points_3d),
-                    self.proj(c2w, K, target_points_3d),
-                )
+                handle_points, target_points = self.handle_points_inits[cam_idx], self.target_points[cam_idx]
                 if step_idx != 0:
-                    handle_points = self.point_tracking(
-                        self.F0s[cam_idx], F1, handle_points, self.handle_points_inits[cam_idx], args
+                    self.handle_points_inits[cam_idx] = self.point_tracking(
+                        self.F0s[cam_idx], F1, handle_points, self.handle_points_inits[cam_idx], self.args
                     )
+                    handle_points = self.handle_points_inits[cam_idx]
                     print("new handle points", handle_points)
 
                 # break if all handle points have reached the targets
@@ -394,8 +396,8 @@ class GaussianDraggingPipeline:
 
                     # motion supervision
                     # with boundary protection
-                    r1, r2 = max(0, int(pi[0]) - args.r_m), min(max_r, int(pi[0]) + args.r_m + 1)
-                    c1, c2 = max(0, int(pi[1]) - args.r_m), min(max_c, int(pi[1]) + args.r_m + 1)
+                    r1, r2 = max(0, int(pi[0]) - self.args.r_m), min(max_r, int(pi[0]) + self.args.r_m + 1)
+                    c1, c2 = max(0, int(pi[1]) - self.args.r_m), min(max_c, int(pi[1]) + self.args.r_m + 1)
                     f0_patch = F1[:, :, r1:r2, c1:c2].detach()
                     f1_patch = self.interpolate_feature_patch(
                         F1, r1 + di[0], r2 + di[0], c1 + di[1], c2 + di[1]
@@ -404,12 +406,12 @@ class GaussianDraggingPipeline:
                     # original code, without boundary protection
                     # f0_patch = F1[:,:,int(pi[0])-args.r_m:int(pi[0])+args.r_m+1, int(pi[1])-args.r_m:int(pi[1])+args.r_m+1].detach()
                     # f1_patch = interpolate_feature_patch(F1, pi[0] + di[0], pi[1] + di[1], args.r_m)
-                    loss += ((2 * args.r_m + 1) ** 2) * F.l1_loss(f0_patch, f1_patch)
+                    loss += ((2 * self.args.r_m + 1) ** 2) * F.l1_loss(f0_patch, f1_patch)
 
                 # masked region must stay unchanged
                 if using_mask:
                     loss += (
-                        args.lam * ((x_prev_updated - x_prev_0) * (1.0 - interp_mask)).abs().sum()
+                        self.args.lam * ((x_prev_updated - x_prev_0) * (1.0 - self.interp_masks[cam_idx])).abs().sum()
                     )
                 # loss += args.lam * ((init_code_orig-init_code)*(1.0-interp_mask)).abs().sum()
                 print("loss total=%f" % (loss.item()))
@@ -418,5 +420,3 @@ class GaussianDraggingPipeline:
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
-
-        return init_code
