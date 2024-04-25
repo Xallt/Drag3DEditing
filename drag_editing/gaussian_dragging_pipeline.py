@@ -38,6 +38,7 @@ class GaussianDraggingPipeline:
         inversion_strength=0.7,
         lam=0.1,
         n_pix_step=80,
+        n_inference_step=50
     ):
         self.gaussians = gaussians
         self.cameras = cameras
@@ -57,6 +58,7 @@ class GaussianDraggingPipeline:
         self.inversion_strength = inversion_strength
         self.lam = lam
         self.n_pix_step = n_pix_step
+        self.n_inference_step = n_inference_step
 
         self.parser = ArgumentParser(description="Training script parameters")
         self.pipe = PipelineParams(self.parser)
@@ -117,7 +119,7 @@ class GaussianDraggingPipeline:
         self.text_embeddings = self.model.get_text_embeddings(self.prompt)
 
         self.args = SimpleNamespace()
-        self.args.n_inference_step = 50
+        self.args.n_inference_step = self.n_inference_step
         self.args.n_actual_inference_step = round(
             self.inversion_strength * self.args.n_inference_step
         )
@@ -141,7 +143,7 @@ class GaussianDraggingPipeline:
         render_pkg = render(self.cameras[cam_idx], self.gaussians, self.pipe, self.background_tensor)
         return render_pkg["render"] # [3, H, W]
 
-    def get_init_code(self, cam_idx, rgb=None):
+    def get_init_code(self, cam_idx, rgb=None, progress_bar=False):
         if rgb is None:
             rgb = self.get_image(cam_idx)
         source_image = rgb[None] * 2 - 1
@@ -156,6 +158,7 @@ class GaussianDraggingPipeline:
             guidance_scale=self.args.guidance_scale,
             num_inference_steps=self.args.n_inference_step,
             num_actual_inference_steps=self.args.n_actual_inference_step,
+            progress_bar=progress_bar
         )
         return invert_code
 
@@ -297,7 +300,8 @@ class GaussianDraggingPipeline:
         return Ia * wa + Ib * wb + Ic * wc + Id * wd
 
     def get_optimizer(self):
-        opt_config = OptimizationParams()
+        parser = ArgumentParser(description="Training script parameters")
+        opt_config = OptimizationParams(parser, max_steps=1800)
         self.gaussians.training_setup(opt_config)
         return self.gaussians.optimizer
 
@@ -309,7 +313,6 @@ class GaussianDraggingPipeline:
         ), "number of handle point must equals target points"
 
         
-        self.init_codes = []
         self.unet_outputs = []
         self.F0s = []
         self.x_prev_0s = []
@@ -325,7 +328,7 @@ class GaussianDraggingPipeline:
             with torch.no_grad():
                 rgb = self.get_image(cam_idx)
                 mask = torch.ones(rgb.shape[:2]).to(rgb) # TODO: mask
-                init_code = self.get_init_code(cam_idx, rgb=rgb)
+                init_code = self.get_init_code(cam_idx, rgb=rgb, progress_bar=True)
                 unet_output, F0 = self.model.forward_unet_features(
                     init_code,
                     self.t,
@@ -353,7 +356,7 @@ class GaussianDraggingPipeline:
         # prepare amp scaler for mixed-precision training
         scaler = torch.cuda.amp.GradScaler()
         for step_idx in tqdm(range(self.args.n_pix_step)):
-            cam_idx = torch.random.randint(0, len(self.cameras))
+            cam_idx = torch.randint(low=0, high=len(self.cameras), size=())
             camera = self.cameras[cam_idx]
             sup_res_h = int(0.5 * camera.image_height)
             sup_res_w = int(0.5 * camera.image_width)
