@@ -322,8 +322,8 @@ class GaussianDraggingPipeline:
         using_mask = False
         for cam_idx in range(len(self.cameras)):
             camera = self.cameras[cam_idx]
-            sup_res_h = int(0.5 * camera.image_height)
-            sup_res_w = int(0.5 * camera.image_width)
+            sup_res_h = 64
+            sup_res_w = 64
             # the init output feature of unet
             with torch.no_grad():
                 rgb = self.get_image(cam_idx)
@@ -341,6 +341,13 @@ class GaussianDraggingPipeline:
                 c2w, K = simple_camera_to_c2w_k(self.cameras[cam_idx])
                 handle_points = self.proj(c2w, K, handle_points_3d)
                 target_points = self.proj(c2w, K, target_points_3d)
+
+                handle_points[:, 0] *= sup_res_w / camera.image_width
+                handle_points[:, 1] *= sup_res_h / camera.image_height
+                target_points[:, 0] *= sup_res_w / camera.image_width
+                target_points[:, 1] *= sup_res_h / camera.image_height
+
+
                 self.handle_points_inits.append(handle_points)
                 self.target_points.append(target_points)
                 self.unet_outputs.append(unet_output)
@@ -353,73 +360,72 @@ class GaussianDraggingPipeline:
 
         optimizer = self.get_optimizer()
 
-        # prepare amp scaler for mixed-precision training
-        scaler = torch.cuda.amp.GradScaler()
         for step_idx in tqdm(range(self.args.n_pix_step)):
             cam_idx = torch.randint(low=0, high=len(self.cameras), size=())
             camera = self.cameras[cam_idx]
-            sup_res_h = int(0.5 * camera.image_height)
-            sup_res_w = int(0.5 * camera.image_width)
+            sup_res_h = 64
+            sup_res_w = 64
 
-            with torch.autocast(device_type="cuda", dtype=torch.float32):
-                init_code = self.get_init_code(cam_idx)
-                unet_output, F1 = self.model.forward_unet_features(
-                    init_code,
-                    self.t,
-                    encoder_hidden_states=self.text_embeddings,
-                    layer_idx=self.args.unet_feature_idx,
-                    interp_res_h=sup_res_h,
-                    interp_res_w=sup_res_w,
+            init_code = self.get_init_code(cam_idx)
+            unet_output, F1 = self.model.forward_unet_features(
+                init_code,
+                self.t,
+                encoder_hidden_states=self.text_embeddings,
+                layer_idx=self.args.unet_feature_idx,
+                interp_res_h=sup_res_h,
+                interp_res_w=sup_res_w,
+            )
+            x_prev_updated, _ = self.model.step(self.unet_outputs[cam_idx], self.t, init_code)
+
+            # do point tracking to update handle points before computing motion supervision loss
+            c2w, K = simple_camera_to_c2w_k(self.cameras[cam_idx])
+            handle_points, target_points = self.handle_points_inits[cam_idx], self.target_points[cam_idx]
+            if step_idx != 0:
+                self.handle_points_inits[cam_idx] = self.point_tracking(
+                    self.F0s[cam_idx], F1, handle_points, self.handle_points_inits[cam_idx], self.args
                 )
-                x_prev_updated, _ = self.model.step(self.unet_outputs[cam_idx], self.t, init_code)
+                handle_points = self.handle_points_inits[cam_idx]
+                print("new handle points", handle_points)
 
-                # do point tracking to update handle points before computing motion supervision loss
-                c2w, K = simple_camera_to_c2w_k(self.cameras[cam_idx])
-                handle_points, target_points = self.handle_points_inits[cam_idx], self.target_points[cam_idx]
-                if step_idx != 0:
-                    self.handle_points_inits[cam_idx] = self.point_tracking(
-                        self.F0s[cam_idx], F1, handle_points, self.handle_points_inits[cam_idx], self.args
-                    )
-                    handle_points = self.handle_points_inits[cam_idx]
-                    print("new handle points", handle_points)
+            # break if all handle points have reached the targets
+            if self.check_handle_reach_target(handle_points, target_points):
+                break
 
-                # break if all handle points have reached the targets
-                if self.check_handle_reach_target(handle_points, target_points):
-                    break
+            loss = 0.0
+            _, _, max_r, max_c = F0.shape
+            for i in range(len(handle_points)):
+                pi, ti = handle_points[i], target_points[i]
+                print(pi, ti)
+                # skip if the distance between target and source is less than 1
+                if (ti - pi).norm() < 2.0:
+                    continue
 
-                loss = 0.0
-                _, _, max_r, max_c = F0.shape
-                for i in range(len(handle_points)):
-                    pi, ti = handle_points[i], target_points[i]
-                    # skip if the distance between target and source is less than 1
-                    if (ti - pi).norm() < 2.0:
-                        continue
+                di = (ti - pi) / (ti - pi).norm()
 
-                    di = (ti - pi) / (ti - pi).norm()
+                # motion supervision
+                # with boundary protection
+                r1, r2 = max(0, int(pi[0]) - self.args.r_m), min(max_r, int(pi[0]) + self.args.r_m + 1)
+                c1, c2 = max(0, int(pi[1]) - self.args.r_m), min(max_c, int(pi[1]) + self.args.r_m + 1)
+                f0_patch = F1[:, :, r1:r2, c1:c2].detach()
+                f1_patch = self.interpolate_feature_patch(
+                    F1, r1 + di[0], r2 + di[0], c1 + di[1], c2 + di[1]
+                )
 
-                    # motion supervision
-                    # with boundary protection
-                    r1, r2 = max(0, int(pi[0]) - self.args.r_m), min(max_r, int(pi[0]) + self.args.r_m + 1)
-                    c1, c2 = max(0, int(pi[1]) - self.args.r_m), min(max_c, int(pi[1]) + self.args.r_m + 1)
-                    f0_patch = F1[:, :, r1:r2, c1:c2].detach()
-                    f1_patch = self.interpolate_feature_patch(
-                        F1, r1 + di[0], r2 + di[0], c1 + di[1], c2 + di[1]
-                    )
+                print(f0_patch.shape, f1_patch.shape)
 
-                    # original code, without boundary protection
-                    # f0_patch = F1[:,:,int(pi[0])-args.r_m:int(pi[0])+args.r_m+1, int(pi[1])-args.r_m:int(pi[1])+args.r_m+1].detach()
-                    # f1_patch = interpolate_feature_patch(F1, pi[0] + di[0], pi[1] + di[1], args.r_m)
-                    loss += ((2 * self.args.r_m + 1) ** 2) * F.l1_loss(f0_patch, f1_patch)
+                # original code, without boundary protection
+                # f0_patch = F1[:,:,int(pi[0])-args.r_m:int(pi[0])+args.r_m+1, int(pi[1])-args.r_m:int(pi[1])+args.r_m+1].detach()
+                # f1_patch = interpolate_feature_patch(F1, pi[0] + di[0], pi[1] + di[1], args.r_m)
+                loss += ((2 * self.args.r_m + 1) ** 2) * F.l1_loss(f0_patch, f1_patch)
 
-                # masked region must stay unchanged
-                if using_mask:
-                    loss += (
-                        self.args.lam * ((x_prev_updated - x_prev_0) * (1.0 - self.interp_masks[cam_idx])).abs().sum()
-                    )
-                # loss += args.lam * ((init_code_orig-init_code)*(1.0-interp_mask)).abs().sum()
-                print("loss total=%f" % (loss.item()))
+            # masked region must stay unchanged
+            if using_mask:
+                loss += (
+                    self.args.lam * ((x_prev_updated - x_prev_0) * (1.0 - self.interp_masks[cam_idx])).abs().sum()
+                )
+            # loss += args.lam * ((init_code_orig-init_code)*(1.0-interp_mask)).abs().sum()
+            print("loss total=%f" % (loss.item()))
 
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
             optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
