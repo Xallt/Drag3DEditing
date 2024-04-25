@@ -132,7 +132,6 @@ class WebUI:
 
         with self.server.add_gui_folder("Dragging controls"):
             self.add_drag_handle = self.server.add_gui_button("Add drag handle")
-            self.add_fixed_handle = self.server.add_gui_button("Add fixed point")
             self.clear_button_handle = self.server.add_gui_button("Clear handles")
 
         self.drag_handles = []
@@ -162,6 +161,12 @@ class WebUI:
                 pos = unprojected_points3d.view(-1).cpu().numpy()
                 handle.position = pos.copy()
                 self.drag_handles.append((pos, handle))
+
+        @self.clear_button_handle.on_click
+        def _(_):
+            for _, handle in self.drag_handles:
+                handle.remove()
+            self.drag_handles.clear()
 
         with self.server.add_gui_folder("Editing"):
             self.prompt_handle = self.server.add_gui_text("SD Prompt", "")
