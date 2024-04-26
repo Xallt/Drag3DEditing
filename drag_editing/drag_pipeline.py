@@ -406,7 +406,6 @@ class DragPipeline(StableDiffusionPipeline):
         x_prev = alpha_prod_t_prev**0.5 * pred_x0 + pred_dir
         return x_prev, pred_x0
 
-    @torch.no_grad()
     def image2latent(self, image):
         DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         if type(image) is Image:
@@ -418,7 +417,6 @@ class DragPipeline(StableDiffusionPipeline):
         latents = latents * 0.18215
         return latents
 
-    @torch.no_grad()
     def latent2image(self, latents, return_type='np'):
         latents = 1 / 0.18215 * latents.detach()
         image = self.vae.decode(latents)['sample']
@@ -437,7 +435,6 @@ class DragPipeline(StableDiffusionPipeline):
 
         return image  # range [-1, 1]
 
-    @torch.no_grad()
     def get_text_embeddings(self, prompt):
         DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         # text embeddings
@@ -475,7 +472,6 @@ class DragPipeline(StableDiffusionPipeline):
         return_features = torch.cat(all_return_features, dim=1)
         return unet_output, return_features
 
-    @torch.no_grad()
     def __call__(
         self,
         prompt,
@@ -548,7 +544,6 @@ class DragPipeline(StableDiffusionPipeline):
             return image, latents_list
         return image
 
-    @torch.no_grad()
     def invert(
         self,
         image: torch.Tensor,
@@ -580,15 +575,15 @@ class DragPipeline(StableDiffusionPipeline):
 
         # unconditional embedding for classifier free guidance
         if guidance_scale > 1.:
-            max_length = text_input.input_ids.shape[-1]
-            unconditional_input = self.tokenizer(
-                [""] * batch_size,
-                padding="max_length",
-                max_length=77,
-                return_tensors="pt"
-            )
-            unconditional_embeddings = self.text_encoder(unconditional_input.input_ids.to(DEVICE))[0]
-            encoder_hidden_states = torch.cat([unconditional_embeddings, encoder_hidden_states], dim=0)
+            with torch.no_grad():
+                unconditional_input = self.tokenizer(
+                    [""] * batch_size,
+                    padding="max_length",
+                    max_length=77,
+                    return_tensors="pt"
+                )
+                unconditional_embeddings = self.text_encoder(unconditional_input.input_ids.to(DEVICE))[0]
+                encoder_hidden_states = torch.cat([unconditional_embeddings, encoder_hidden_states], dim=0)
 
         # print("latents shape: ", latents.shape)
         # interative sampling
@@ -597,7 +592,7 @@ class DragPipeline(StableDiffusionPipeline):
         # print("attributes: ", self.scheduler.__dict__)
         latents_list = [latents]
         pbar = list(reversed(self.scheduler.timesteps))
-        if num_actual_inference_steps:
+        if num_actual_inference_steps is not None:
             pbar = pbar[:num_actual_inference_steps]
         if progress_bar:
             pbar = tqdm(pbar, desc="DDIM Inversion")
@@ -609,15 +604,19 @@ class DragPipeline(StableDiffusionPipeline):
                 model_inputs = latents
 
             # predict the noise
-            noise_pred = self.unet(model_inputs,
-                t,
-                encoder_hidden_states=encoder_hidden_states,
+            with torch.no_grad():
+                noise_pred = self.unet(
+                    model_inputs,
+                    t,
+                    encoder_hidden_states=encoder_hidden_states,
                 )
             if guidance_scale > 1.:
                 noise_pred_uncon, noise_pred_con = noise_pred.chunk(2, dim=0)
                 noise_pred = noise_pred_uncon + guidance_scale * (noise_pred_con - noise_pred_uncon)
             # compute the previous noise sample x_t-1 -> x_t
+            print(latents.requires_grad)
             latents, pred_x0 = self.inv_step(noise_pred, prev_t, t, latents)
+            print(latents.requires_grad)
             prev_t = t
 
             if return_intermediates:
