@@ -596,14 +596,13 @@ class DragPipeline(StableDiffusionPipeline):
         # print("Valid timesteps: ", reversed(self.scheduler.timesteps))
         # print("attributes: ", self.scheduler.__dict__)
         latents_list = [latents]
-        pbar = reversed(self.scheduler.timesteps)
+        pbar = list(reversed(self.scheduler.timesteps))
+        if num_actual_inference_steps:
+            pbar = pbar[:num_actual_inference_steps]
         if progress_bar:
             pbar = tqdm(pbar, desc="DDIM Inversion")
         prev_t = 0
         for i, t in enumerate(pbar):
-            if num_actual_inference_steps is not None and i >= num_actual_inference_steps:
-                continue
-
             if guidance_scale > 1.:
                 model_inputs = torch.cat([latents] * 2)
             else:
