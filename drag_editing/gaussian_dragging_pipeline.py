@@ -276,18 +276,16 @@ class GaussianDraggingPipeline:
                 handle_points = self.proj(c2w, K, handle_points_3d)
                 target_points = self.proj(c2w, K, target_points_3d)
 
-                F0_at_handles = []
-                for handle_point in handle_points:
-                    F0_at_handle = F0[:, :, int(handle_point[1]), int(handle_point[0])]
-                    F0_at_handles.append(F0_at_handle)
-                self.F0_at_handles.append(F0_at_handles)
-                
-
                 handle_points[:, 0] *= sup_res_w / camera.image_width
                 handle_points[:, 1] *= sup_res_h / camera.image_height
                 target_points[:, 0] *= sup_res_w / camera.image_width
                 target_points[:, 1] *= sup_res_h / camera.image_height
 
+                F0_at_handles = []
+                for handle_point in handle_points:
+                    F0_at_handle = F0[:, :, int(handle_point[1]), int(handle_point[0])]
+                    F0_at_handles.append(F0_at_handle)
+                self.F0_at_handles.append(F0_at_handles)
 
                 self.handle_points_inits.append(handle_points)
                 self.target_points.append(target_points)
