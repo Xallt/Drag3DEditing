@@ -596,7 +596,6 @@ class DragPipeline(StableDiffusionPipeline):
         # print("Valid timesteps: ", reversed(self.scheduler.timesteps))
         # print("attributes: ", self.scheduler.__dict__)
         latents_list = [latents]
-        pred_x0_list = [latents]
         pbar = reversed(self.scheduler.timesteps)
         if progress_bar:
             pbar = tqdm(pbar, desc="DDIM Inversion")
@@ -620,9 +619,10 @@ class DragPipeline(StableDiffusionPipeline):
                 noise_pred = noise_pred_uncon + guidance_scale * (noise_pred_con - noise_pred_uncon)
             # compute the previous noise sample x_t-1 -> x_t
             latents, pred_x0 = self.inv_step(noise_pred, prev_t, t, latents)
-            latents_list.append(latents)
-            pred_x0_list.append(pred_x0)
             prev_t = t
+
+            if return_intermediates:
+                latents_list.append(latents)
 
         if return_intermediates:
             # return the intermediate laters during inversion
