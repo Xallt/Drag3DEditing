@@ -3,8 +3,6 @@ import sys
 sys.path.insert(0, "deps/DragDiffusion")
 import torch
 from diffusers import DDIMScheduler, AutoencoderKL
-from drag_pipeline import DragPipeline
-from pytorch_lightning import seed_everything
 from types import SimpleNamespace
 from argparse import ArgumentParser
 from gaussiansplatting.arguments import PipelineParams
@@ -12,11 +10,9 @@ from gaussiansplatting.arguments import OptimizationParams
 from gaussiansplatting.gaussian_renderer import render
 import numpy as np
 from drag_editing.lora_utils import train_lora
-from drag_editing.drag_utils import drag_diffusion_update
 from drag_editing.utils import to_homogeneous, simple_camera_to_c2w_k
+from drag_editing.drag_pipeline import DragPipeline
 import torch.nn.functional as F
-from utils.attn_utils import register_attention_editor_diffusers, MutualSelfAttentionControl
-from copy import deepcopy
 from tqdm import tqdm
 
 
