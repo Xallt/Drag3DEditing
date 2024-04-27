@@ -238,7 +238,7 @@ class GaussianDraggingPipeline:
 
     def get_optimizer(self):
         parser = ArgumentParser(description="Training script parameters")
-        opt_config = OptimizationParams(parser, max_steps=1800)
+        opt_config = OptimizationParams(parser, max_steps=1800, lr_scaler=100)
         self.gaussians.training_setup(opt_config)
         return self.gaussians.optimizer
 
