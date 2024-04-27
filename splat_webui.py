@@ -223,59 +223,6 @@ class WebUI:
             for i in frame_index:
                 self.make_one_camera_pose_frame(i)
 
-    def precompute_drag_images(self):
-        start_step = 0
-        start_layer = 10
-        latent_lr = 0.01
-        inversion_strength = 0.7
-        lam = 0.1
-        n_pix_step = 80
-        for i, cam in enumerate(self.colmap_cameras):
-            with torch.no_grad():
-                render_pkg = self.render(cam)
-            img = (render_pkg["comp_rgb"][0].cpu().numpy().copy() * 255).astype(np.uint8)
-            mask = np.ones(img.shape[:2])
-            
-            c2w, K = self.camera_params(self.viser_cam)
-            c2w = c2w
-            K = K
-            def proj(c2w, K, p):
-                p = to_homogeneous(p)
-                p = (np.linalg.inv(c2w) @ p)[:3]
-                p = K @ p
-                p = p[:2] / p[2]
-                return p
-            points = []
-            for fixed_pos, handle in self.drag_handles:
-                p = proj(c2w, K, fixed_pos).astype(np.int32).tolist()
-                p_target = proj(c2w, K, handle.position).astype(np.int32).tolist()
-                points.append(p)
-                points.append(p_target)
-
-            img_with_clicks = get_points(img, points)
-            Image.fromarray(img_with_clicks).save(self.tmp_path / "img_with_clicks.png")
-
-            model_path = "runwayml/stable-diffusion-v1-5"
-            vae_path = "default"
-            lora_path = "./lora_tmp"
-            drag_result = run_drag(
-                img,
-                img_with_clicks,
-                mask,
-                self.prompt_handle.value,
-                points,
-                inversion_strength,
-                lam,
-                latent_lr,
-                n_pix_step,
-                model_path,
-                vae_path,
-                lora_path,
-                start_step,
-                start_layer,
-                save_dir=f"./results/{i}"
-            )
-
     def camera_params(self, camera, wxyz=None, position=None, resolution=None):
         if wxyz is None:
             wxyz = camera.wxyz
