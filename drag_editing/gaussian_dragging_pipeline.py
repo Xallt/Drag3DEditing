@@ -89,7 +89,7 @@ class GaussianDraggingPipeline:
             )
             self.model = DragPipeline.from_pretrained(
                 self.model_path, scheduler=scheduler, torch_dtype=torch.float32
-            ).to(self.device)
+            )
             # call this function to override unet forward function,
             # so that intermediate features are returned after forward
             self.model.modify_unet_forward()
@@ -110,7 +110,12 @@ class GaussianDraggingPipeline:
             # obtain text embeddings
 
             # off load model to cpu, which save some memory.
-            self.model.enable_model_cpu_offload()
+            # self.model.enable_model_cpu_offload()
+
+            self.model.to(self.device)
+            self.model.text_encoder.requires_grad_(False)
+            self.model.unet.requires_grad_(False)
+            self.model.vae.requires_grad_(False)
 
         self.text_embeddings = self.model.get_text_embeddings(self.prompt)
 
@@ -312,7 +317,6 @@ class GaussianDraggingPipeline:
             x_prev_updated, _ = self.model.step(self.unet_outputs[cam_idx], self.t, init_code)
 
             # do point tracking to update handle points before computing motion supervision loss
-            c2w, K = simple_camera_to_c2w_k(self.cameras[cam_idx])
             handle_points, target_points = self.handle_points_inits[cam_idx], self.target_points[cam_idx]
             if step_idx != 0:
                 self.handle_points_inits[cam_idx] = self.point_tracking(
@@ -329,7 +333,6 @@ class GaussianDraggingPipeline:
             _, _, max_r, max_c = F1.shape
             for i in range(len(handle_points)):
                 pi, ti = handle_points[i], target_points[i]
-                print(pi, ti)
                 # skip if the distance between target and source is less than 1
                 if (ti - pi).norm() < 2.0:
                     continue
@@ -344,8 +347,6 @@ class GaussianDraggingPipeline:
                 f1_patch = self.interpolate_feature_patch(
                     F1, r1 + di[0], r2 + di[0], c1 + di[1], c2 + di[1]
                 )
-
-                print(f0_patch.shape, f1_patch.shape)
 
                 # original code, without boundary protection
                 # f0_patch = F1[:,:,int(pi[0])-args.r_m:int(pi[0])+args.r_m+1, int(pi[1])-args.r_m:int(pi[1])+args.r_m+1].detach()
