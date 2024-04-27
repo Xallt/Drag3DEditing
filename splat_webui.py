@@ -491,15 +491,6 @@ class WebUI:
                     max_screen_size=5,
                 )
 
-    @torch.no_grad()
-    def render_cameras_list(self, edit_cameras):
-        origin_frames = []
-        for cam in edit_cameras:
-            out = self.render(cam)["comp_rgb"]
-            origin_frames.append(out)
-
-        return origin_frames
-
     def add_theme(self):
         buttons = (
             TitlebarButton(
