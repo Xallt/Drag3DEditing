@@ -33,6 +33,7 @@ import cv2
 from drag_editing.utils import unproject, to_homogeneous, get_points, c2w_k_to_simple_camera
 from drag_editing.lora_utils import train_lora
 from drag_editing.drag_utils import run_drag
+from drag_editing.gaussian_dragging_pipeline import GaussianDraggingPipeline
 from tqdm import tqdm
 from pathlib import Path
 
@@ -201,7 +202,15 @@ class WebUI:
 
         @self.dragging_handle.on_click
         def _(_):
-            self.precompute_drag_images()
+            dragging_pipeline = GaussianDraggingPipeline(self.gaussian, self.colmap_cameras, n_inference_step = 2, inversion_strength=0.5)
+            dragging_pipeline.initialize(self.prompt_handle.value)
+            handle_points, target_points = [], []
+            for fixed_pos, handle in self.drag_handles:
+                handle_points.append(fixed_pos.tolist())
+                target_points.append(handle.position.tolist())
+            handle_points = torch.tensor(handle_points, dtype=torch.float32, device='cuda')
+            target_points = torch.tensor(target_points, dtype=torch.float32, device='cuda')
+            dragging_pipeline.drag(handle_points, target_points)
 
 
         with torch.no_grad():
