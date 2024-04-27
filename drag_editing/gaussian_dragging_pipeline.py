@@ -257,7 +257,7 @@ class GaussianDraggingPipeline:
         self.target_points = []
         # self.interp_masks = []
         # using_mask = False
-        for cam_idx in range(len(self.cameras)):
+        for cam_idx in tqdm(range(len(self.cameras)), desc="Rendering references"):
             camera = self.cameras[cam_idx]
             sup_res_h = 64
             sup_res_w = 64
@@ -265,7 +265,7 @@ class GaussianDraggingPipeline:
             with torch.no_grad():
                 rgb = self.get_image(cam_idx)
                 # mask = torch.ones(rgb.shape[:2]).to(rgb) # TODO: mask
-                init_code = self.get_init_code(cam_idx, rgb=rgb, progress_bar=True)
+                init_code = self.get_init_code(cam_idx, rgb=rgb)
                 unet_output, F0 = self.model.forward_unet_features(
                     init_code,
                     self.t,
