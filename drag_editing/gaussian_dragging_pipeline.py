@@ -68,14 +68,6 @@ class GaussianDraggingPipeline:
 
     def initialize(self, prompt):
         self.prompt = prompt
-        self.renders = []
-        for cam_idx in tqdm(range(len(self.cameras))):
-            camera = self.cameras[cam_idx]
-            # Obtain source image from gaussians
-            with torch.no_grad():
-                render_pkg = render(camera, self.gaussians, self.pipe, self.background_tensor)
-
-            self.renders.append(render_pkg)
 
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         if not hasattr(self, "model"):
@@ -166,9 +158,18 @@ class GaussianDraggingPipeline:
     def train_lora(self):
         assert getattr(self, "prompt", None) is not None, "Please set prompt first"
 
+        renders = []
+        for cam_idx in tqdm(range(len(self.cameras))):
+            camera = self.cameras[cam_idx]
+            # Obtain source image from gaussians
+            with torch.no_grad():
+                render_pkg = render(camera, self.gaussians, self.pipe, self.background_tensor)
+
+            renders.append(render_pkg)
+
         imgs = [
-            (self.renders[i]["render"].moveaxis(0, -1).cpu().numpy().copy() * 255).astype(np.uint8)
-            for i in range(len(self.renders))
+            (renders[i]["render"].moveaxis(0, -1).cpu().numpy().copy() * 255).astype(np.uint8)
+            for i in range(len(renders))
         ]
         train_lora(
             imgs,
