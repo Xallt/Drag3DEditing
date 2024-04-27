@@ -44,7 +44,7 @@ def override_forward(self):
         mid_block_additional_residual: Optional[torch.Tensor] = None,
         down_intrablock_additional_residuals: Optional[Tuple[torch.Tensor]] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
-        return_intermediates: bool = False,
+        return_intermediates: List[int] = [],
     ):
         # By default samples have to be AT least a multiple of the overall upsampling factor.
         # The overall upsampling factor is equal to 2 ** (# num of upsampling layers).
@@ -306,7 +306,11 @@ def override_forward(self):
         if is_controlnet:
             sample = sample + mid_block_additional_residual
 
-        all_intermediate_features = [sample]
+        intermediate_feature_num = 0
+        if intermediate_feature_num in return_intermediates:
+            all_intermediate_features = [sample]
+        else:
+            all_intermediate_features = []
 
         # 5. up
         for i, upsample_block in enumerate(self.up_blocks):
@@ -339,7 +343,9 @@ def override_forward(self):
                     upsample_size=upsample_size,
                     scale=lora_scale,
                 )
-            all_intermediate_features.append(sample)
+            intermediate_feature_num += 1
+            if intermediate_feature_num in return_intermediates:
+                all_intermediate_features.append(sample)
 
         # 6. post-process
         if self.conv_norm_out:
@@ -461,11 +467,11 @@ class DragPipeline(StableDiffusionPipeline):
             z,
             t,
             encoder_hidden_states=encoder_hidden_states,
-            return_intermediates=True
-            )
+            return_intermediates=layer_idx
+        )
 
         all_return_features = []
-        for idx in layer_idx:
+        for idx in range(len(layer_idx)):
             feat = all_intermediate_features[idx]
             feat = F.interpolate(feat, (interp_res_h, interp_res_w), mode='bilinear')
             all_return_features.append(feat)
@@ -568,7 +574,9 @@ class DragPipeline(StableDiffusionPipeline):
             elif isinstance(prompt, str):
                 if batch_size > 1:
                     prompt = [prompt] * batch_size
-            encoder_hidden_states = self.get_text_embeddings(prompt)
+
+            with torch.no_grad():
+                encoder_hidden_states = self.get_text_embeddings(prompt)
 
         # define initial latents
         latents = self.image2latent(image)
@@ -614,9 +622,7 @@ class DragPipeline(StableDiffusionPipeline):
                 noise_pred_uncon, noise_pred_con = noise_pred.chunk(2, dim=0)
                 noise_pred = noise_pred_uncon + guidance_scale * (noise_pred_con - noise_pred_uncon)
             # compute the previous noise sample x_t-1 -> x_t
-            print(latents.requires_grad)
             latents, pred_x0 = self.inv_step(noise_pred, prev_t, t, latents)
-            print(latents.requires_grad)
             prev_t = t
 
             if return_intermediates:
