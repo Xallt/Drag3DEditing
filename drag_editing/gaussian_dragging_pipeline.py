@@ -255,6 +255,7 @@ class GaussianDraggingPipeline:
         # self.x_prev_0s = []
         self.handle_points = []
         self.target_points = []
+        self.valid_track_mask = []
         # self.interp_masks = []
         # using_mask = False
         for cam_idx in tqdm(range(len(self.cameras)), desc="Rendering references"):
@@ -283,6 +284,14 @@ class GaussianDraggingPipeline:
                 handle_points[:, 1] *= sup_res_h / camera.image_height
                 target_points[:, 0] *= sup_res_w / camera.image_width
                 target_points[:, 1] *= sup_res_h / camera.image_height
+
+                valid_track_mask = [True for _ in range(len(handle_points))]
+                for ps in [handle_points, target_points]:
+                    for i, p in enumerate(ps):
+                        if p[0] < 0 or p[0] >= camera.image_width or p[1] < 0 or p[1] >= camera.image_height:
+                            valid_track_mask[i] = False
+                self.valid_track_mask.append(valid_track_mask)
+
 
                 F0_at_handles = []
                 for handle_point in handle_points:
@@ -334,6 +343,8 @@ class GaussianDraggingPipeline:
             loss = 0.0
             _, _, max_r, max_c = F1.shape
             for i in range(len(handle_points)):
+                if not self.valid_track_mask[cam_idx][i]:
+                    continue
                 pi, ti = handle_points[i], target_points[i]
                 # skip if the distance between target and source is less than 1
                 if (ti - pi).norm() < 2.0:
