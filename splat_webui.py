@@ -202,7 +202,7 @@ class WebUI:
 
         @self.dragging_handle.on_click
         def _(_):
-            dragging_pipeline = GaussianDraggingPipeline(self.gaussian, self.colmap_cameras, n_inference_step = 2, inversion_strength=0.5)
+            dragging_pipeline = GaussianDraggingPipeline(self.gaussian, self.colmap_cameras, n_inference_step = 2, inversion_strength=0.5, n_pix_step=int(1e6))
             dragging_pipeline.initialize(self.prompt_handle.value)
             handle_points, target_points = [], []
             for fixed_pos, handle in self.drag_handles:
