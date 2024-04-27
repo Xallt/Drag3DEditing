@@ -593,11 +593,6 @@ class DragPipeline(StableDiffusionPipeline):
                 unconditional_embeddings = self.text_encoder(unconditional_input.input_ids.to(DEVICE))[0]
                 encoder_hidden_states = torch.cat([unconditional_embeddings, encoder_hidden_states], dim=0)
 
-        # print("latents shape: ", latents.shape)
-        # interative sampling
-        self.scheduler.set_timesteps(num_inference_steps)
-        # print("Valid timesteps: ", reversed(self.scheduler.timesteps))
-        # print("attributes: ", self.scheduler.__dict__)
         latents_list = [latents]
         pbar = list(reversed(self.scheduler.timesteps))
         if num_actual_inference_steps is not None:
@@ -605,7 +600,7 @@ class DragPipeline(StableDiffusionPipeline):
         if progress_bar:
             pbar = tqdm(pbar, desc="DDIM Inversion")
         prev_t = 0
-        for i, t in enumerate(pbar):
+        for t in pbar:
             if guidance_scale > 1.:
                 model_inputs = torch.cat([latents] * 2)
             else:
@@ -622,7 +617,7 @@ class DragPipeline(StableDiffusionPipeline):
                 noise_pred_uncon, noise_pred_con = noise_pred.chunk(2, dim=0)
                 noise_pred = noise_pred_uncon + guidance_scale * (noise_pred_con - noise_pred_uncon)
             # compute the previous noise sample x_t-1 -> x_t
-            latents, pred_x0 = self.inv_step(noise_pred, prev_t, t, latents)
+            latents, _ = self.inv_step(noise_pred, prev_t, t, latents)
             prev_t = t
 
             if return_intermediates:
