@@ -251,11 +251,11 @@ class GaussianDraggingPipeline:
         
         self.unet_outputs = []
         self.F0_at_handles = []
-        self.x_prev_0s = []
+        # self.x_prev_0s = []
         self.handle_points_inits = []
         self.target_points = []
-        self.interp_masks = []
-        using_mask = False
+        # self.interp_masks = []
+        # using_mask = False
         for cam_idx in range(len(self.cameras)):
             camera = self.cameras[cam_idx]
             sup_res_h = 64
@@ -263,7 +263,7 @@ class GaussianDraggingPipeline:
             # the init output feature of unet
             with torch.no_grad():
                 rgb = self.get_image(cam_idx)
-                mask = torch.ones(rgb.shape[:2]).to(rgb) # TODO: mask
+                # mask = torch.ones(rgb.shape[:2]).to(rgb) # TODO: mask
                 init_code = self.get_init_code(cam_idx, rgb=rgb, progress_bar=True)
                 unet_output, F0 = self.model.forward_unet_features(
                     init_code,
@@ -273,7 +273,7 @@ class GaussianDraggingPipeline:
                     interp_res_h=sup_res_h,
                     interp_res_w=sup_res_w,
                 )
-                x_prev_0, _ = self.model.step(unet_output, self.t, init_code)
+                # x_prev_0, _ = self.model.step(unet_output, self.t, init_code)
                 c2w, K = simple_camera_to_c2w_k(self.cameras[cam_idx])
                 handle_points = self.proj(c2w, K, handle_points_3d)
                 target_points = self.proj(c2w, K, target_points_3d)
@@ -292,10 +292,10 @@ class GaussianDraggingPipeline:
                 self.handle_points_inits.append(handle_points)
                 self.target_points.append(target_points)
                 self.unet_outputs.append(unet_output)
-                self.x_prev_0s.append(x_prev_0)
-                interp_mask = F.interpolate(mask[None, None], (init_code.shape[2], init_code.shape[3]), mode="nearest")[0, 0]
-                self.interp_masks.append(interp_mask)
-                using_mask = using_mask or interp_mask.sum() != 0.0
+                # self.x_prev_0s.append(x_prev_0)
+                # interp_mask = F.interpolate(mask[None, None], (init_code.shape[2], init_code.shape[3]), mode="nearest")[0, 0]
+                # self.interp_masks.append(interp_mask)
+                # using_mask = using_mask or interp_mask.sum() != 0.0
 
 
         optimizer = self.get_optimizer()
@@ -307,7 +307,7 @@ class GaussianDraggingPipeline:
             sup_res_w = 64
 
             init_code = self.get_init_code(cam_idx)
-            unet_output, F1 = self.model.forward_unet_features(
+            _, F1 = self.model.forward_unet_features(
                 init_code,
                 self.t,
                 encoder_hidden_states=self.text_embeddings,
@@ -315,7 +315,7 @@ class GaussianDraggingPipeline:
                 interp_res_h=sup_res_h,
                 interp_res_w=sup_res_w,
             )
-            x_prev_updated, _ = self.model.step(self.unet_outputs[cam_idx], self.t, init_code)
+            # x_prev_updated, _ = self.model.step(unet_output, self.t, init_code)
 
             # do point tracking to update handle points before computing motion supervision loss
             handle_points, target_points = self.handle_points_inits[cam_idx], self.target_points[cam_idx]
@@ -325,6 +325,7 @@ class GaussianDraggingPipeline:
                 )
                 handle_points = self.handle_points_inits[cam_idx]
                 print("new handle points", handle_points)
+                print("target points", target_points)
 
             # break if all handle points have reached the targets
             if self.check_handle_reach_target(handle_points, target_points):
@@ -355,10 +356,10 @@ class GaussianDraggingPipeline:
                 loss += ((2 * self.args.r_m + 1) ** 2) * F.l1_loss(f0_patch, f1_patch)
 
             # masked region must stay unchanged
-            if using_mask:
-                loss += (
-                    self.args.lam * ((x_prev_updated - x_prev_0) * (1.0 - self.interp_masks[cam_idx])).abs().sum()
-                )
+            # if using_mask:
+            #     loss += (
+            #         self.args.lam * ((x_prev_updated - x_prev_0) * (1.0 - self.interp_masks[cam_idx])).abs().sum()
+            #     )
             # loss += args.lam * ((init_code_orig-init_code)*(1.0-interp_mask)).abs().sum()
             print("loss total=%f" % (loss.item()))
 
