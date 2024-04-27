@@ -365,6 +365,9 @@ class GaussianDraggingPipeline:
                 # f0_patch = F1[:,:,int(pi[0])-args.r_m:int(pi[0])+args.r_m+1, int(pi[1])-args.r_m:int(pi[1])+args.r_m+1].detach()
                 # f1_patch = interpolate_feature_patch(F1, pi[0] + di[0], pi[1] + di[1], args.r_m)
                 loss += ((2 * self.args.r_m + 1) ** 2) * F.l1_loss(f0_patch, f1_patch)
+            if type(loss) is float:
+                "no valid tracking point"
+                continue
 
             # masked region must stay unchanged
             # if using_mask:
