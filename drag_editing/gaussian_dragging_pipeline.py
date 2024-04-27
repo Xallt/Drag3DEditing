@@ -189,11 +189,12 @@ class GaussianDraggingPipeline:
         p = p[..., :2] / p[..., 2]
         return p
 
-    def point_tracking(self, F0_at_handles, F1, handle_points, handle_points_init, args):
+    def point_tracking(self, F0_at_handles, F1, handle_points, args):
         with torch.no_grad():
             _, _, max_r, max_c = F1.shape
+            new_handle_points = torch.zeros_like(handle_points)
             for i in range(len(handle_points)):
-                pi = handle_points_init[i]
+                pi = handle_points[i]
                 f0 = F0_at_handles[i]
 
                 r1, r2 = max(0, int(pi[0]) - args.r_p), min(max_r, int(pi[0]) + args.r_p + 1)
@@ -204,9 +205,9 @@ class GaussianDraggingPipeline:
                 row, col = divmod(all_dist.argmin().item(), all_dist.shape[-1])
                 # handle_points[i][0] = pi[0] - args.r_p + row
                 # handle_points[i][1] = pi[1] - args.r_p + col
-                handle_points[i][0] = r1 + row
-                handle_points[i][1] = c1 + col
-            return handle_points
+                new_handle_points[i][0] = r1 + row
+                new_handle_points[i][1] = c1 + col
+            return new_handle_points
 
     def check_handle_reach_target(self, handle_points, target_points):
         # dist = (torch.cat(handle_points,dim=0) - torch.cat(target_points,dim=0)).norm(dim=-1)
@@ -252,7 +253,7 @@ class GaussianDraggingPipeline:
         self.unet_outputs = []
         self.F0_at_handles = []
         # self.x_prev_0s = []
-        self.handle_points_inits = []
+        self.handle_points = []
         self.target_points = []
         # self.interp_masks = []
         # using_mask = False
@@ -289,14 +290,13 @@ class GaussianDraggingPipeline:
                     F0_at_handles.append(F0_at_handle)
                 self.F0_at_handles.append(F0_at_handles)
 
-                self.handle_points_inits.append(handle_points)
+                self.handle_points.append(handle_points)
                 self.target_points.append(target_points)
                 self.unet_outputs.append(unet_output)
                 # self.x_prev_0s.append(x_prev_0)
                 # interp_mask = F.interpolate(mask[None, None], (init_code.shape[2], init_code.shape[3]), mode="nearest")[0, 0]
                 # self.interp_masks.append(interp_mask)
                 # using_mask = using_mask or interp_mask.sum() != 0.0
-
 
         optimizer = self.get_optimizer()
 
@@ -318,12 +318,12 @@ class GaussianDraggingPipeline:
             # x_prev_updated, _ = self.model.step(unet_output, self.t, init_code)
 
             # do point tracking to update handle points before computing motion supervision loss
-            handle_points, target_points = self.handle_points_inits[cam_idx], self.target_points[cam_idx]
+            handle_points, target_points = self.handle_points[cam_idx], self.target_points[cam_idx]
             if step_idx != 0:
-                self.handle_points_inits[cam_idx] = self.point_tracking(
-                    self.F0_at_handles[cam_idx], F1, handle_points, self.handle_points_inits[cam_idx], self.args
+                self.handle_points[cam_idx] = self.point_tracking(
+                    self.F0_at_handles[cam_idx], F1, handle_points, self.args
                 )
-                handle_points = self.handle_points_inits[cam_idx]
+                handle_points = self.handle_points[cam_idx]
                 print("new handle points", handle_points)
                 print("target points", target_points)
 
