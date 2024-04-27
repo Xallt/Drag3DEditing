@@ -467,7 +467,8 @@ class WebUI:
         gs_camera = self.camera
         if gs_camera is None:
             return
-        output = self.render(gs_camera)
+        with torch.no_grad():
+            output = self.render(gs_camera)
 
         out = self.prepare_output_image(output)
         self.server.set_background_image(out, format="jpeg")
