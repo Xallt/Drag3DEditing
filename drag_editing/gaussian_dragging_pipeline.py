@@ -189,11 +189,14 @@ class GaussianDraggingPipeline:
         p = p[..., :2] / p[..., 2]
         return p
 
-    def point_tracking(self, F0_at_handles, F1, handle_points, args):
+    def point_tracking(self, F0_at_handles, F1, handle_points, args, cam_idx):
         with torch.no_grad():
             _, _, max_r, max_c = F1.shape
             new_handle_points = torch.zeros_like(handle_points)
             for i in range(len(handle_points)):
+                if not self.valid_track_mask[cam_idx][i]:
+                    new_handle_points[i] = handle_points[i]
+                    continue
                 pi = handle_points[i]
                 f0 = F0_at_handles[i]
 
@@ -294,7 +297,10 @@ class GaussianDraggingPipeline:
 
 
                 F0_at_handles = []
-                for handle_point in handle_points:
+                for i, handle_point in enumerate(handle_points):
+                    if not valid_track_mask[i]:
+                        F0_at_handles.append(None)
+                        continue
                     F0_at_handle = F0[:, :, int(handle_point[1]), int(handle_point[0])]
                     F0_at_handles.append(F0_at_handle)
                 self.F0_at_handles.append(F0_at_handles)
@@ -330,7 +336,7 @@ class GaussianDraggingPipeline:
             handle_points, target_points = self.handle_points[cam_idx], self.target_points[cam_idx]
             if step_idx != 0:
                 self.handle_points[cam_idx] = self.point_tracking(
-                    self.F0_at_handles[cam_idx], F1, handle_points, self.args
+                    self.F0_at_handles[cam_idx], F1, self.handle_points[cam_idx], self.args, cam_idx
                 )
                 handle_points = self.handle_points[cam_idx]
                 print("new handle points", handle_points)
