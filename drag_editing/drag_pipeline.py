@@ -26,6 +26,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from diffusers import StableDiffusionPipeline
 
+torch.backends.cudnn.benchmark = True
+
 # override unet forward
 # The only difference from diffusers:
 # return intermediate UNet features of all UpSample blocks
@@ -475,7 +477,9 @@ class DragPipeline(StableDiffusionPipeline):
             feat = all_intermediate_features[idx]
             feat = F.interpolate(feat, (interp_res_h, interp_res_w), mode='bilinear')
             all_return_features.append(feat)
+        del all_intermediate_features
         return_features = torch.cat(all_return_features, dim=1)
+        del all_return_features
         return unet_output, return_features
 
     def __call__(
@@ -490,7 +494,6 @@ class DragPipeline(StableDiffusionPipeline):
         guidance_scale=7.5,
         latents=None,
         neg_prompt=None,
-        return_intermediates=False,
         **kwds):
         DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
@@ -510,7 +513,7 @@ class DragPipeline(StableDiffusionPipeline):
 
         # unconditional embedding for classifier free guidance
         if guidance_scale > 1.:
-            if neg_prompt:
+            if neg_prompt is not None:
                 uc_text = neg_prompt
             else:
                 uc_text = ""
@@ -521,8 +524,6 @@ class DragPipeline(StableDiffusionPipeline):
         # iterative sampling
         self.scheduler.set_timesteps(num_inference_steps)
         # print("Valid timesteps: ", reversed(self.scheduler.timesteps))
-        if return_intermediates:
-            latents_list = [latents]
         for i, t in enumerate(tqdm(self.scheduler.timesteps, desc="DDIM Sampler")):
             if num_actual_inference_steps is not None and i < num_inference_steps - num_actual_inference_steps:
                 continue
@@ -542,12 +543,8 @@ class DragPipeline(StableDiffusionPipeline):
                 noise_pred = noise_pred_uncon + guidance_scale * (noise_pred_con - noise_pred_uncon)
             # compute the previous noise sample x_t -> x_t-1
             latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
-            if return_intermediates:
-                latents_list.append(latents)
 
         image = self.latent2image(latents, return_type="pt")
-        if return_intermediates:
-            return image, latents_list
         return image
 
     def invert(
@@ -555,11 +552,8 @@ class DragPipeline(StableDiffusionPipeline):
         image: torch.Tensor,
         prompt,
         encoder_hidden_states=None,
-        num_inference_steps=50,
         num_actual_inference_steps=None,
         guidance_scale=7.5,
-        eta=0.0,
-        return_intermediates=False,
         progress_bar=True,
         **kwds):
         """
@@ -592,8 +586,8 @@ class DragPipeline(StableDiffusionPipeline):
                 )
                 unconditional_embeddings = self.text_encoder(unconditional_input.input_ids.to(DEVICE))[0]
                 encoder_hidden_states = torch.cat([unconditional_embeddings, encoder_hidden_states], dim=0)
+                del unconditional_input, unconditional_embeddings
 
-        latents_list = [latents]
         pbar = list(reversed(self.scheduler.timesteps))
         if num_actual_inference_steps is not None:
             pbar = pbar[:num_actual_inference_steps]
@@ -613,18 +607,14 @@ class DragPipeline(StableDiffusionPipeline):
                     t,
                     encoder_hidden_states=encoder_hidden_states,
                 )
+                del model_inputs
             if guidance_scale > 1.:
                 noise_pred_uncon, noise_pred_con = noise_pred.chunk(2, dim=0)
                 noise_pred = noise_pred_uncon + guidance_scale * (noise_pred_con - noise_pred_uncon)
+                del noise_pred_uncon
             # compute the previous noise sample x_t-1 -> x_t
             latents, _ = self.inv_step(noise_pred, prev_t, t, latents)
             prev_t = t
+            del noise_pred
 
-            if return_intermediates:
-                latents_list.append(latents)
-
-        if return_intermediates:
-            # return the intermediate laters during inversion
-            # pred_x0_list = [self.latent2image(img, return_type="pt") for img in pred_x0_list]
-            return latents, latents_list
         return latents

@@ -34,7 +34,10 @@ class GaussianDraggingPipeline:
         inversion_strength=0.7,
         lam=0.1,
         n_pix_step=80,
-        n_inference_step=50
+        n_inference_step=50,
+        model_cpu_offload=False,
+        attention_slicing=False,
+        half_precision=False,
     ):
         self.gaussians = gaussians
         self.cameras = cameras
@@ -59,6 +62,9 @@ class GaussianDraggingPipeline:
         self.parser = ArgumentParser(description="Training script parameters")
         self.pipe = PipelineParams(self.parser)
         self.background_tensor = torch.tensor([0, 0, 0], dtype=torch.float32, device="cuda")
+        self.model_cpu_offload = model_cpu_offload
+        self.attention_slicing = attention_slicing
+        self.half_precision = half_precision
 
     def preprocess_image(self, image, device, dtype=torch.float32):
         image = torch.from_numpy(image).float() / 127.5 - 1  # [-1, 1]
@@ -68,6 +74,7 @@ class GaussianDraggingPipeline:
 
     def initialize(self, prompt):
         self.prompt = prompt
+        self.dtype = torch.float16 if self.half_precision else torch.float32
 
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         if not hasattr(self, "model"):
@@ -80,7 +87,7 @@ class GaussianDraggingPipeline:
                 steps_offset=1,
             )
             self.model = DragPipeline.from_pretrained(
-                self.model_path, scheduler=scheduler, torch_dtype=torch.float32
+                self.model_path, scheduler=scheduler, torch_dtype=self.dtype
             )
             # call this function to override unet forward function,
             # so that intermediate features are returned after forward
@@ -89,7 +96,7 @@ class GaussianDraggingPipeline:
             # set vae
             if self.vae_path != "default":
                 self.model.vae = AutoencoderKL.from_pretrained(self.vae_path).to(
-                    self.model.vae.device, self.model.vae.dtype
+                    self.model.vae.device, self.model.dtype
                 )
 
             # set lora
@@ -132,6 +139,7 @@ class GaussianDraggingPipeline:
             self.args.n_inference_step - self.args.n_actual_inference_step
         ]
 
+
     def get_image(self, cam_idx):
         render_pkg = render(self.cameras[cam_idx], self.gaussians, self.pipe, self.background_tensor)
         return render_pkg["render"] # [3, H, W]
@@ -140,7 +148,7 @@ class GaussianDraggingPipeline:
         if rgb is None:
             rgb = self.get_image(cam_idx)
         source_image = rgb[None] * 2 - 1
-        source_image = source_image.to(torch.float32)
+        source_image = source_image.to(self.dtype)
 
         # invert the source image
         # the latent code resolution is too small, only 64*64
@@ -149,7 +157,6 @@ class GaussianDraggingPipeline:
             self.prompt,
             encoder_hidden_states=self.text_embeddings,
             guidance_scale=self.args.guidance_scale,
-            num_inference_steps=self.args.n_inference_step,
             num_actual_inference_steps=self.args.n_actual_inference_step,
             progress_bar=progress_bar
         )
@@ -245,6 +252,13 @@ class GaussianDraggingPipeline:
         self.gaussians.training_setup(opt_config)
         return self.gaussians.optimizer
 
+    def enable_optimizations(self):
+        if self.model_cpu_offload:
+            self.model.enable_model_cpu_offload()
+        if self.attention_slicing:
+            self.model.enable_attention_slicing()
+
+
     def drag(
         self, handle_points_3d, target_points_3d
     ):
@@ -314,6 +328,8 @@ class GaussianDraggingPipeline:
                 # using_mask = using_mask or interp_mask.sum() != 0.0
 
         optimizer = self.get_optimizer()
+
+        self.enable_optimizations()
 
         for step_idx in tqdm(range(self.args.n_pix_step)):
             cam_idx = torch.randint(low=0, high=len(self.cameras), size=())
