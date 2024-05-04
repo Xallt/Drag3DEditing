@@ -260,7 +260,7 @@ class GaussianDraggingPipeline:
 
 
     def drag(
-        self, handle_points_3d, target_points_3d
+        self, handle_points_3d, target_points_3d, debug=False
     ):
         assert len(handle_points_3d) == len(
             target_points_3d
@@ -296,6 +296,13 @@ class GaussianDraggingPipeline:
                 c2w, K = simple_camera_to_c2w_k(self.cameras[cam_idx])
                 handle_points = self.proj(c2w, K, handle_points_3d)
                 target_points = self.proj(c2w, K, target_points_3d)
+
+                if debug:
+                    rgb_debug = (rgb.detach().cpu().numpy() * 255).astype(np.uint8).transpose(1, 2, 0).copy()
+                    sel_pix = torch.stack([handle_points, target_points], dim=1).view(-1, 2).cpu().numpy().astype(np.int32)
+                    # print(sel_pix, rgb_debug.shape)
+                    rgb_debug = get_points(rgb_debug, sel_pix)
+                    Image.fromarray(rgb_debug).save(f"tmp/debug_{cam_idx}.png")
 
                 handle_points[:, 0] *= sup_res_w / camera.image_width
                 handle_points[:, 1] *= sup_res_h / camera.image_height
