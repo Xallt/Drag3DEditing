@@ -202,15 +202,19 @@ class WebUI:
 
         @self.dragging_handle.on_click
         def _(_):
-            dragging_pipeline = GaussianDraggingPipeline(self.gaussian, self.colmap_cameras, n_inference_step = 2, inversion_strength=0.5, n_pix_step=int(1e6), half_precision=True)
+            dragging_pipeline = GaussianDraggingPipeline(self.gaussian, self.colmap_cameras, n_inference_step = 3, inversion_strength=0.7, n_pix_step=int(1e6), half_precision=True)
             dragging_pipeline.initialize(self.prompt_handle.value)
+            print(f"{dragging_pipeline.t =}")
             handle_points, target_points = [], []
             for fixed_pos, handle in self.drag_handles:
                 handle_points.append(fixed_pos.tolist())
                 target_points.append(handle.position.tolist())
+            print(f"{handle_points =}")
+            print(f"{target_points =}")
+
             handle_points = torch.tensor(handle_points, dtype=torch.float32, device='cuda')
             target_points = torch.tensor(target_points, dtype=torch.float32, device='cuda')
-            dragging_pipeline.drag(handle_points, target_points)
+            dragging_pipeline.drag(handle_points, target_points, debug=True)
 
 
         with torch.no_grad():
