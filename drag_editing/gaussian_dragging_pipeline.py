@@ -10,10 +10,12 @@ from gaussiansplatting.arguments import OptimizationParams
 from gaussiansplatting.gaussian_renderer import render
 import numpy as np
 from drag_editing.lora_utils import train_lora
-from drag_editing.utils import to_homogeneous, simple_camera_to_c2w_k
+from drag_editing.utils import to_homogeneous, simple_camera_to_c2w_k, get_points
 from drag_editing.drag_pipeline import DragPipeline
 import torch.nn.functional as F
 from tqdm import tqdm
+from PIL import Image
+from pathlib import Path
 
 
 class GaussianDraggingPipeline:
