@@ -312,7 +312,7 @@ class GaussianDraggingPipeline:
                 valid_track_mask = [True for _ in range(len(handle_points))]
                 for ps in [handle_points, target_points]:
                     for i, p in enumerate(ps):
-                        if p[0] < 0 or p[0] >= camera.image_width or p[1] < 0 or p[1] >= camera.image_height:
+                        if p[0] < 0 or p[0] >= sup_res_w or p[1] < 0 or p[1] >= sup_res_h:
                             valid_track_mask[i] = False
                 self.valid_track_mask.append(valid_track_mask)
 
