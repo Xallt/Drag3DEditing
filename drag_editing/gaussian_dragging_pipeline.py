@@ -409,3 +409,4 @@ class GaussianDraggingPipeline:
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+        print("done")
