@@ -366,8 +366,8 @@ class GaussianDraggingPipeline:
                 print("target points", target_points)
 
             # break if all handle points have reached the targets
-            if self.check_handle_reach_target(handle_points, target_points):
-                break
+            # if self.check_handle_reach_target(handle_points, target_points):
+            #     break
 
             loss = 0.0
             _, _, max_r, max_c = F1.shape
