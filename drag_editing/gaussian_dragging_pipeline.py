@@ -252,7 +252,25 @@ class GaussianDraggingPipeline:
         parser = ArgumentParser(description="Training script parameters")
         opt_config = OptimizationParams(parser, max_steps=1800, lr_scaler=100)
         self.gaussians.training_setup(opt_config)
-        return self.gaussians.optimizer
+        l = [
+            {
+                "params": [self.gaussians._xyz],
+                "lr": opt_config.position_lr_init,
+                "name": "xyz",
+            },
+            {
+                "params": [self.gaussians._scaling],
+                "lr": opt_config.scaling_lr,
+                "name": "scaling",
+            },
+            {
+                "params": [self.gaussians._rotation],
+                "lr": opt_config.rotation_lr,
+                "name": "rotation",
+            },
+        ]
+        optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+        return optimizer
 
     def enable_optimizations(self):
         if self.model_cpu_offload:
