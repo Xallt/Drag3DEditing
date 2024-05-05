@@ -399,6 +399,9 @@ class WebUI:
             **render_pkg,
         }
 
+    def has_active_client(self):
+        return len(list(self.server.get_clients().values())) > 0
+
     @property
     def viser_cam(self):
         return list(self.server.get_clients().values())[0].camera
@@ -462,8 +465,8 @@ class WebUI:
 
     def render_loop(self):
         while True:
-            # if self.viewer_need_update:
-            self.update_viewer()
+            if self.has_active_client():
+                self.update_viewer()
             time.sleep(1e-2)
 
     @torch.no_grad()
