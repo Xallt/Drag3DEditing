@@ -84,9 +84,9 @@ class DraggingViserUI:
             current_time = datetime.datetime.now()
             formatted_time = current_time.strftime("%Y-%m-%d-%H:%M")
             Path("mesh_export").mkdir(parents=True, exist_ok=True)
-            trimesh.Trimesh(
-                vertices=to_numpy(self.deformer.verts_prime), faces=self.mesh.faces
-            ).export(os.path.join("mesh_export", "{}.obj".format(formatted_time)))
+            self.mesh.apply_scale(mesh_diameter)
+            self.mesh.export(os.path.join("mesh_export", "{}.obj".format(formatted_time)))
+            self.mesh.apply_scale(1.0 / mesh_diameter)
 
         with self.server.add_gui_folder("Handles"):
             self.add_drag_handle = self.server.add_gui_button("Add drag handle")
