@@ -100,6 +100,9 @@ class WebUI:
         bounding_sphere = self.mesh.bounding_sphere
         self.mesh_diameter = 2 * bounding_sphere.primitive.radius
 
+        proximity_query = trimesh.proximity.ProximityQuery(self.mesh)
+        _, self.vertex_matches = proximity_query.vertex(self.gaussian._xyz.detach().cpu().numpy())
+
         self.deformer = Deformer()
         self.deformer.set_mesh(self.mesh.vertices, self.mesh.faces)
 
@@ -670,7 +673,9 @@ class WebUI:
                 self.update_viewer()
             if hasattr(self, "deformer") and hasattr(self.deformer, "verts_prime"):
                 if not np.allclose(to_numpy(self.deformer.verts_prime), self.mesh.vertices, atol=1e-5):
-                    self.set_vertices(to_numpy(self.deformer.verts_prime))
+                    verts_updated = to_numpy(self.deformer.verts_prime)
+                    self.gaussian._xyz.data += torch.from_numpy((verts_updated - self.mesh.vertices)[self.vertex_matches]).to(self.gaussian._xyz.data)
+                    self.set_vertices(verts_updated)
             time.sleep(1e-2)
 
     @torch.no_grad()
