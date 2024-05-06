@@ -114,6 +114,9 @@ class WebUI:
 
         @self.load_button.on_click
         def _(_):
+            if not Path(self.load_path.value).exists():
+                print(f"ERROR: Specified file {self.load_path.value} doesn't exist.")
+                return
             with self.viewer_lock:
                 self.gaussian.load_ply(self.load_path.value)
 
