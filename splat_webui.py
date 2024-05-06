@@ -13,6 +13,7 @@ from PIL import Image
 
 from gaussiansplatting.gaussian_renderer import render
 from gaussiansplatting.scene import GaussianModel
+from gaussiansplatting.utils.general_utils import build_rotation
 
 from gaussiansplatting.arguments import (
     PipelineParams,
@@ -674,7 +675,14 @@ class WebUI:
             if hasattr(self, "deformer") and hasattr(self.deformer, "verts_prime"):
                 if not np.allclose(to_numpy(self.deformer.verts_prime), self.mesh.vertices, atol=1e-5):
                     verts_updated = to_numpy(self.deformer.verts_prime)
+                    cell_rotations = to_numpy(self.deformer.cell_rotations)
                     self.gaussian._xyz.data += torch.from_numpy((verts_updated - self.mesh.vertices)[self.vertex_matches]).to(self.gaussian._xyz.data)
+                    self.gaussian._rotation.data = torch.from_numpy(
+                        tf.SO3.from_matrix(
+                            cell_rotations[self.vertex_matches] @ \
+                            build_rotation(self.gaussian._rotation).detach().cpu().numpy()
+                        ).as_quaternion_xyzw()[:, [3, 0, 1, 2]]
+                    ).to(self.gaussian._rotation)
                     self.set_vertices(verts_updated)
             time.sleep(1e-2)
 
