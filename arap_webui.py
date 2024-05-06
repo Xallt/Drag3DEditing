@@ -141,8 +141,12 @@ class DraggingViserUI:
 
         fixed_tri_indices = [control.tri_index for control in self.fixed_handles]
 
+        selection_list = []
+        for control in self.hit_pos_controls:
+            selection_list += self.mesh.faces[control.tri_index].tolist()
+
         selection = {
-            "selection": list(self.mesh.faces[self.hit_pos_controls[0].tri_index]),
+            "selection": selection_list,
             "fixed": list(set(self.mesh.faces[fixed_tri_indices].reshape(-1))),
         }
         self.deformer.set_selection(selection["selection"], selection["fixed"])
