@@ -105,7 +105,6 @@ class WebUI:
         _, self.vertex_matches = proximity_query.vertex(self.gaussian._xyz.detach().cpu().numpy())
 
         self.deformer = Deformer()
-        self.deformer.set_mesh(self.mesh.vertices, self.mesh.faces)
 
         self.hit_pos_handles = []
         self.hit_pos_controls = []
@@ -206,7 +205,7 @@ class WebUI:
         def _(_):
             self.add_drag_handle.disabled = True
 
-            @self.server.on_scene_click
+            @self.server.on_scene_pointer("click")
             def scene_click_cb(message: viser.ScenePointerEvent) -> None:
                 ray_hit = self.ray_intersection(message.ray_origin, message.ray_direction)
                 if ray_hit is None:
@@ -215,7 +214,7 @@ class WebUI:
 
                 # Successful click => remove callback.
                 self.add_drag_handle.disabled = False
-                self.server.remove_scene_click_callback(scene_click_cb)
+                self.server.remove_scene_pointer_callback()
 
                 self.add_hit_handle(hit_pos, f"/hit_pos_{len(self.hit_pos_handles)}")
                 handle = self.server.add_transform_controls(
@@ -231,7 +230,7 @@ class WebUI:
         def _(_):
             self.add_fixed_handle.disabled = True
 
-            @self.server.on_scene_click
+            @self.server.on_scene_pointer("click")
             def scene_click_cb(message: viser.ScenePointerEvent) -> None:
                 ray_hit = self.ray_intersection(message.ray_origin, message.ray_direction)
                 if ray_hit is None:
@@ -240,7 +239,7 @@ class WebUI:
 
                 # Successful click => remove callback.
                 self.add_fixed_handle.disabled = False
-                self.server.remove_scene_click_callback(scene_click_cb)
+                self.server.remove_scene_pointer_callback()
 
                 self.add_hit_handle(
                     hit_pos, f"/fixed_{len(self.hit_pos_handles)}", color=(1.0, 1.0, 0.0)
@@ -342,25 +341,10 @@ class WebUI:
                 lora_rank,
             )
 
-        # @self.dragging_handle.on_click
-        # def _(_):
-        #     dragging_pipeline = GaussianDraggingPipeline(self.gaussian, self.colmap_cameras, n_inference_step = 3, inversion_strength=0.7, n_pix_step=int(1e6), half_precision=True)
-        #     dragging_pipeline.initialize(self.prompt_handle.value)
-        #     print(f"{dragging_pipeline.t =}")
-        #     handle_points, target_points = [], []
-        #     for fixed_pos, handle in self.drag_handles:
-        #         handle_points.append(fixed_pos.tolist())
-        #         target_points.append(handle.position.tolist())
-        #     print(f"{handle_points =}")
-        #     print(f"{target_points =}")
-
-        #     handle_points = torch.tensor(handle_points, dtype=torch.float32, device='cuda')
-        #     target_points = torch.tensor(target_points, dtype=torch.float32, device='cuda')
-        #     dragging_pipeline.drag(handle_points, target_points, debug=True)
 
         @self.dragging_handle.on_click
         def _(_):
-            self.deformer.reset()
+            self.deformer.set_mesh(self.mesh.vertices, self.mesh.faces)
 
             deformation = np.eye(4)
             deformation[:3, 3] = self.hit_pos_controls[0].control.position - self.hit_pos_controls[0].hit_pos
@@ -672,7 +656,7 @@ class WebUI:
         while True:
             if self.has_active_client():
                 self.update_viewer()
-            if hasattr(self, "deformer") and hasattr(self.deformer, "verts_prime"):
+            if hasattr(self.deformer, "graph"):
                 if not np.allclose(to_numpy(self.deformer.verts_prime), self.mesh.vertices, atol=1e-5):
                     verts_updated = to_numpy(self.deformer.verts_prime)
                     cell_rotations = to_numpy(self.deformer.cell_rotations)
