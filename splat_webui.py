@@ -39,7 +39,10 @@ from tqdm import tqdm
 from pathlib import Path
 from threading import Lock
 
-from arap_webui import DraggingControlPointer, RayHit, FixedControlPointer
+from arap_webui import DraggingControlPointer, RayHit, FixedControlPointer, to_numpy
+
+sys.path.insert(0, "deps/as-rigid-as-possible")
+from arap import Deformer
 
 
 class WebUI:
@@ -96,6 +99,9 @@ class WebUI:
         )
         bounding_sphere = self.mesh.bounding_sphere
         self.mesh_diameter = 2 * bounding_sphere.primitive.radius
+
+        self.deformer = Deformer()
+        self.deformer.set_mesh(self.mesh.vertices, self.mesh.faces)
 
         self.hit_pos_handles = []
         self.hit_pos_controls = []
@@ -332,21 +338,43 @@ class WebUI:
                 lora_rank,
             )
 
+        # @self.dragging_handle.on_click
+        # def _(_):
+        #     dragging_pipeline = GaussianDraggingPipeline(self.gaussian, self.colmap_cameras, n_inference_step = 3, inversion_strength=0.7, n_pix_step=int(1e6), half_precision=True)
+        #     dragging_pipeline.initialize(self.prompt_handle.value)
+        #     print(f"{dragging_pipeline.t =}")
+        #     handle_points, target_points = [], []
+        #     for fixed_pos, handle in self.drag_handles:
+        #         handle_points.append(fixed_pos.tolist())
+        #         target_points.append(handle.position.tolist())
+        #     print(f"{handle_points =}")
+        #     print(f"{target_points =}")
+
+        #     handle_points = torch.tensor(handle_points, dtype=torch.float32, device='cuda')
+        #     target_points = torch.tensor(target_points, dtype=torch.float32, device='cuda')
+        #     dragging_pipeline.drag(handle_points, target_points, debug=True)
+
         @self.dragging_handle.on_click
         def _(_):
-            dragging_pipeline = GaussianDraggingPipeline(self.gaussian, self.colmap_cameras, n_inference_step = 3, inversion_strength=0.7, n_pix_step=int(1e6), half_precision=True)
-            dragging_pipeline.initialize(self.prompt_handle.value)
-            print(f"{dragging_pipeline.t =}")
-            handle_points, target_points = [], []
-            for fixed_pos, handle in self.drag_handles:
-                handle_points.append(fixed_pos.tolist())
-                target_points.append(handle.position.tolist())
-            print(f"{handle_points =}")
-            print(f"{target_points =}")
+            self.deformer.reset()
 
-            handle_points = torch.tensor(handle_points, dtype=torch.float32, device='cuda')
-            target_points = torch.tensor(target_points, dtype=torch.float32, device='cuda')
-            dragging_pipeline.drag(handle_points, target_points, debug=True)
+            deformation = np.eye(4)
+            deformation[:3, 3] = self.hit_pos_controls[0].control.position - self.hit_pos_controls[0].hit_pos
+            self.deformer.set_deformation(deformation)
+
+            fixed_tri_indices = [control.tri_index for control in self.fixed_handles]
+
+            selection_list = []
+            for control in self.hit_pos_controls:
+                selection_list += self.mesh.faces[control.tri_index].tolist()
+
+            selection = {
+                "selection": selection_list,
+                "fixed": list(set(self.mesh.faces[fixed_tri_indices].reshape(-1))),
+            }
+            self.deformer.set_selection(selection["selection"], selection["fixed"])
+
+            self.deformer.apply_deformation(3)
 
 
         with torch.no_grad():
@@ -627,10 +655,22 @@ class WebUI:
         self.renderer_output.options = list(output.keys())
         return out_img.cpu().moveaxis(0, -1).numpy().astype(np.uint8)
 
+    def set_vertices(self, vertices):
+        self.mesh.vertices = vertices
+        self.mesh_handle = self.server.add_mesh_trimesh(
+            name="/mesh",
+            mesh=self.mesh,
+            # wxyz=tf.SO3.from_x_radians(np.pi / 2).wxyz,
+            position=(0.0, 0.0, 0.0),
+            visible=self.view_mode == "mesh",
+        )
     def render_loop(self):
         while True:
             if self.has_active_client():
                 self.update_viewer()
+            if hasattr(self, "deformer") and hasattr(self.deformer, "verts_prime"):
+                if not np.allclose(to_numpy(self.deformer.verts_prime), self.mesh.vertices, atol=1e-5):
+                    self.set_vertices(to_numpy(self.deformer.verts_prime))
             time.sleep(1e-2)
 
     @torch.no_grad()
