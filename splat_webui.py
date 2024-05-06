@@ -39,6 +39,7 @@ from tqdm import tqdm
 from pathlib import Path
 from threading import Lock
 
+from arap_webui import DraggingControlPointer, RayHit, FixedControlPointer
 
 
 class WebUI:
@@ -93,6 +94,12 @@ class WebUI:
             position=(0.0, 0.0, 0.0),
             visible=False,
         )
+        bounding_sphere = self.mesh.bounding_sphere
+        self.mesh_diameter = 2 * bounding_sphere.primitive.radius
+
+        self.hit_pos_handles = []
+        self.hit_pos_controls = []
+        self.fixed_handles = []
 
         self.add_theme()
         self.draw_flag = True
@@ -180,6 +187,7 @@ class WebUI:
 
         with self.server.add_gui_folder("Dragging controls"):
             self.add_drag_handle = self.server.add_gui_button("Add drag handle")
+            self.add_fixed_handle = self.server.add_gui_button("Add fixed point")
             self.clear_button_handle = self.server.add_gui_button("Clear handles")
 
         self.drag_handles = []
@@ -190,31 +198,53 @@ class WebUI:
 
             @self.server.on_scene_click
             def scene_click_cb(message: viser.ScenePointerEvent) -> None:
-                pass
-                click_pos = self.scene_pointer_event_to_click_pos(message)
-                c2w, K = self.camera_params(message.client.camera)
-                depth = self.render_cache["depth"]
-                c2w, K = torch.from_numpy(c2w).to(depth), torch.from_numpy(K).to(depth)
-                unprojected_points3d = unproject(c2w, K, torch.tensor(list(click_pos))[None].to(depth), depth[0, :, :, 0])
+                ray_hit = self.ray_intersection(message.ray_origin, message.ray_direction)
+                if ray_hit is None:
+                    return
+                hit_pos, tri_index, normal = ray_hit.hit_pos, ray_hit.tri_index, ray_hit.normal
 
+                # Successful click => remove callback.
                 self.add_drag_handle.disabled = False
                 self.server.remove_scene_click_callback(scene_click_cb)
 
+                self.add_hit_handle(hit_pos, f"/hit_pos_{len(self.hit_pos_handles)}")
                 handle = self.server.add_transform_controls(
-                    f"/control_{len(self.drag_handles)}",
-                    scale=1,
+                    f"/control_{len(self.hit_pos_handles)}",
+                    scale=0.05 * self.mesh_diameter,
                     disable_sliders=True,
                     disable_rotations=True,
                 )
-                pos = unprojected_points3d.view(-1).cpu().numpy()
-                handle.position = pos.copy()
-                self.drag_handles.append((pos, handle))
+                handle.position = hit_pos + normal * 0.03
+                self.hit_pos_controls.append(DraggingControlPointer(hit_pos, tri_index, handle))
+                self.add_hit_handle(np.zeros(3), f"/control_{len(self.hit_pos_handles)}/sphere")
+        @self.add_fixed_handle.on_click
+        def _(_):
+            self.add_fixed_handle.disabled = True
+
+            @self.server.on_scene_click
+            def scene_click_cb(message: viser.ScenePointerEvent) -> None:
+                ray_hit = self.ray_intersection(message.ray_origin, message.ray_direction)
+                if ray_hit is None:
+                    return
+                hit_pos, tri_index = ray_hit.hit_pos, ray_hit.tri_index
+
+                # Successful click => remove callback.
+                self.add_fixed_handle.disabled = False
+                self.server.remove_scene_click_callback(scene_click_cb)
+
+                self.add_hit_handle(
+                    hit_pos, f"/fixed_{len(self.hit_pos_handles)}", color=(1.0, 1.0, 0.0)
+                )
+                self.fixed_handles.append(FixedControlPointer(hit_pos, tri_index))
 
         @self.clear_button_handle.on_click
         def _(_):
-            for _, handle in self.drag_handles:
+            for handle in self.hit_pos_handles:
                 handle.remove()
-            self.drag_handles.clear()
+            for handle in self.hit_pos_controls:
+                handle.control.remove()
+            self.hit_pos_handles.clear()
+            self.hit_pos_controls.clear()
 
         with self.server.add_gui_folder("Preprocessing") as self.preprocessing_folder:
             self.sphere_cut_button_handle = self.server.add_gui_button("Add sphere for cutting")
@@ -328,7 +358,41 @@ class WebUI:
             )
             for i in frame_index:
                 self.make_one_camera_pose_frame(i)
+
+    def add_hit_handle(self, hit_pos, name, color=(1.0, 0.0, 0.0)):
+        # Create a sphere at the hit location.
+        hit_pos_mesh = trimesh.creation.icosphere(radius=0.005 * self.mesh_diameter)
+        hit_pos_mesh.visual.vertex_colors = (*color, 1.0)  # type: ignore
+        hit_pos_handle = self.server.add_mesh_trimesh(
+            name=name,
+            mesh=hit_pos_mesh,
+            position=hit_pos,
+        )
+        self.hit_pos_handles.append(hit_pos_handle)
+        return hit_pos_handle
     
+    def ray_intersection(self, ray_origin, ray_direction):
+        R_world_mesh = tf.SO3(self.mesh_handle.wxyz)
+        R_mesh_world = R_world_mesh.inverse()
+        origin = (R_mesh_world @ np.array(ray_origin)).reshape(1, 3)
+        direction = (R_mesh_world @ np.array(ray_direction)).reshape(1, 3)
+        intersector = trimesh.ray.ray_pyembree.RayMeshIntersector(self.mesh)
+        hit_pos, _, tri_index = intersector.intersects_location(origin, direction)
+
+        if len(hit_pos) == 0:
+            return None
+
+        # Get the first hit position (based on distance from the ray origin).
+        hit_pos_idx = np.argmin(np.linalg.norm(hit_pos - origin, axis=1))
+        hit_pos = hit_pos[hit_pos_idx]
+        tri_index = tri_index[hit_pos_idx]
+        normal = self.mesh.face_normals[tri_index]
+
+        # Transform into world space.
+        hit_pos = R_world_mesh @ hit_pos
+        normal = R_world_mesh @ normal
+
+        return RayHit(hit_pos, tri_index, normal)
     def camera_params(self, camera, wxyz=None, position=None, resolution=None):
         if wxyz is None:
             wxyz = camera.wxyz
@@ -543,7 +607,7 @@ class WebUI:
             out_img = (out_img * 255).to(torch.uint8).cpu().to(torch.uint8)
             out_img = out_img.moveaxis(-1, 0)  # C H W
 
-        if len(self.drag_handles) > 0:
+        if len(self.hit_pos_controls) > 0:
             out_img_np = out_img.cpu().moveaxis(0, -1).numpy().copy()
             c2w, K = self.camera_params(self.viser_cam)
             c2w = c2w
@@ -554,11 +618,9 @@ class WebUI:
                 p = K @ p
                 p = p[:2] / p[2]
                 return p
-            for fixed_pos, handle in self.drag_handles:
-                p0 = proj(c2w, K, fixed_pos)
-                cv2.circle(out_img_np, (int(p0[0]), int(p0[1])), 5, (255, 255, 0), -1)
-                p1 = proj(c2w, K, handle.position)
-                cv2.circle(out_img_np, (int(p1[0]), int(p1[1])), 5, (255, 0, 0), -1)
+            for hit_control in self.hit_pos_controls:
+                p0 = proj(c2w, K, hit_control.hit_pos)
+                p1 = proj(c2w, K, hit_control.control.position)
                 cv2.arrowedLine(out_img_np, (int(p0[0]), int(p0[1])), (int(p1[0]), int(p1[1])), (255, 255, 255), 2, tipLength=0.2)
             out_img = torch.from_numpy(out_img_np).cuda().moveaxis(-1, 0)
 
