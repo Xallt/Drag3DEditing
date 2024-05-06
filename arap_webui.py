@@ -151,7 +151,7 @@ class DraggingViserUI:
         }
         self.deformer.set_selection(selection["selection"], selection["fixed"])
 
-        self.deformer.apply_deformation(100)
+        self.deformer.apply_deformation(3)
 
         # vertices will be updated in the update loop
 
