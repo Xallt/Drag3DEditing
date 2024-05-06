@@ -103,11 +103,19 @@ class WebUI:
                     "comp_rgb",
                 ],
             )
+
+            self.load_button = self.server.add_gui_button("Load Gaussian")
+            self.load_path = self.server.add_gui_text("Load Path", self.gs_source)
             self.save_button = self.server.add_gui_button("Save Gaussian")
 
             self.frame_show = self.server.add_gui_checkbox(
                 "Show Frame", initial_value=False
             )
+
+        @self.load_button.on_click
+        def _(_):
+            with self.viewer_lock:
+                self.gaussian.load_ply(self.load_path.value)
 
         @self.save_button.on_click
         def _(_):
