@@ -36,11 +36,13 @@ from drag_editing.drag_utils import run_drag
 from drag_editing.gaussian_dragging_pipeline import GaussianDraggingPipeline
 from tqdm import tqdm
 from pathlib import Path
+from threading import Lock
 
 
 
 class WebUI:
     def __init__(self, cfg) -> None:
+        self.viewer_lock = Lock()
         self.gs_source = cfg.gs_source
         self.colmap_dir = cfg.colmap_dir
         self.port = 8084
@@ -168,6 +170,61 @@ class WebUI:
             for _, handle in self.drag_handles:
                 handle.remove()
             self.drag_handles.clear()
+
+        with self.server.add_gui_folder("Preprocessing") as self.preprocessing_folder:
+            self.sphere_cut_button_handle = self.server.add_gui_button("Add sphere for cutting")
+            self.sphere_cut_data = None
+
+        @self.sphere_cut_button_handle.on_click
+        def _(_):
+            opacity_backup = self.gaussian._opacity.data.clone()
+            self.sphere_cut_button_handle.disabled = True
+            self.sphere_cut_data = {}
+            # Create a handle in the center of the scene with position controls
+            self.sphere_cut_data["handle"] = self.server.add_transform_controls(
+                "/sphere_cut",
+                scale=1,
+                disable_sliders=True,
+                disable_rotations=True,
+            )
+
+            with self.preprocessing_folder:
+                self.sphere_cut_data["radius"] = self.server.add_gui_slider(
+                    "Sphere radius", min=0.1, max=10, step=0.1, initial_value=1
+                )
+                cut_button = self.server.add_gui_button("Cut")
+
+            handle = self.sphere_cut_data["handle"]
+            def on_sphere_cut_update(_):
+                pos = handle.position
+                with self.viewer_lock:
+                    self.gaussian._opacity.data[:] = opacity_backup
+                    self.gaussian._opacity.data[
+                        torch.norm(self.gaussian.get_xyz - torch.tensor(pos).to("cuda"), dim=-1) >= self.sphere_cut_data["radius"].value
+                    ] = -100.0
+            handle.on_update(on_sphere_cut_update)
+            self.sphere_cut_data["radius"].on_update(on_sphere_cut_update)
+        
+            @cut_button.on_click
+            def _(_):
+                pos = handle.position
+                with self.viewer_lock:
+                    cut_mask = torch.norm(self.gaussian.get_xyz - torch.tensor(pos).to("cuda"), dim=-1) < self.sphere_cut_data["radius"].value
+                    self.gaussian._opacity.data[:] = opacity_backup
+
+                    self.gaussian._xyz.data = self.gaussian._xyz.data[cut_mask]
+                    self.gaussian._opacity.data = self.gaussian._opacity.data[cut_mask]
+                    self.gaussian._features_dc.data = self.gaussian._features_dc.data[cut_mask]
+                    self.gaussian._features_rest.data = self.gaussian._features_rest.data[cut_mask]
+                    self.gaussian._scaling.data = self.gaussian._scaling.data[cut_mask]
+                    self.gaussian._rotation.data = self.gaussian._rotation.data[cut_mask]
+
+                self.sphere_cut_button_handle.disabled = False
+                self.sphere_cut_data["handle"].remove()
+                self.sphere_cut_data["radius"].remove()
+                cut_button.remove()
+                self.sphere_cut_data = None
+
 
         with self.server.add_gui_folder("Editing"):
             self.prompt_handle = self.server.add_gui_text("SD Prompt", "")
@@ -474,8 +531,9 @@ class WebUI:
         gs_camera = self.camera
         if gs_camera is None:
             return
-        with torch.no_grad():
-            output = self.render(gs_camera)
+        with self.viewer_lock:
+            with torch.no_grad():
+                output = self.render(gs_camera)
 
         out = self.prepare_output_image(output)
         self.server.set_background_image(out, format="jpeg")
