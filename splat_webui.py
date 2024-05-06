@@ -598,6 +598,7 @@ class WebUI:
                 self.colmap_dir, h=-1, w=-1, aspect=self.aspect
             ).cameras
             self.begin_call(list(self.server.get_clients().values())[0])
+            self.viser_cam.up_direction = tf.SO3(self.viser_cam.wxyz) @ np.array([0.0, -1.0, 0.0])
         return c2w_k_to_simple_camera(*self.camera_params(self.viser_cam))
 
     def click_cb(self, pointer):
