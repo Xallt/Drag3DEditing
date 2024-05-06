@@ -4,6 +4,7 @@ import time
 import numpy as np
 import torch
 from typing import Dict, Any
+import trimesh
 
 import viser
 import viser.transforms as tf
@@ -83,8 +84,21 @@ class WebUI:
 
 
         self.server = viser.ViserServer(port=self.port)
+
+        self.mesh = trimesh.load(cfg.mesh)
+        self.mesh_handle = self.server.add_mesh_trimesh(
+            name="/mesh",
+            mesh=self.mesh,
+            # wxyz=tf.SO3.from_x_radians(np.pi / 2).wxyz,
+            position=(0.0, 0.0, 0.0),
+            visible=False,
+        )
+
         self.add_theme()
         self.draw_flag = True
+        self.view_mode = "gaussian"
+        with self.server.add_gui_folder("View Mode") as self.view_folder:
+            self.switch_view_button = self.server.add_gui_button("Switch View to Mesh")
         with self.server.add_gui_folder("Render Setting"):
             self.resolution_slider = self.server.add_gui_slider(
                 "Resolution", min=384, max=4096, step=2, initial_value=512
@@ -94,13 +108,13 @@ class WebUI:
             #     "FoV Scaler", min=0.2, max=2, step=0.1, initial_value=1
             # )
 
-            self.fps = self.server.add_gui_text(
-                "FPS", initial_value="-1", disabled=True
-            )
+
             self.renderer_output = self.server.add_gui_dropdown(
                 "Renderer Output",
                 [
                     "comp_rgb",
+                    "depth",
+                    "opacity"
                 ],
             )
 
@@ -111,6 +125,26 @@ class WebUI:
             self.frame_show = self.server.add_gui_checkbox(
                 "Show Frame", initial_value=False
             )
+
+        @self.switch_view_button.on_click
+        def on_switch_view_button_click(_):
+            if self.view_mode == "gaussian":
+                self.mesh_handle.visible = True
+                self.view_mode = "mesh"
+                self.switch_view_button.remove()
+                with self.view_folder:
+                    self.switch_view_button = self.server.add_gui_button("Switch View to Gaussian")
+                    self.switch_view_button.on_click(on_switch_view_button_click)
+            elif self.view_mode == "mesh":
+                self.mesh_handle.visible = False
+                self.view_mode = "gaussian"
+                self.switch_view_button._impl.label = "Switch View to Mesh"
+                self.switch_view_button.remove()
+                with self.view_folder:
+                    self.switch_view_button = self.server.add_gui_button("Switch View to Mesh")
+                    self.switch_view_button.on_click(on_switch_view_button_click)
+            else:
+                raise ValueError(f"Unknown view mode: {self.view_mode}")
 
         @self.load_button.on_click
         def _(_):
@@ -608,7 +642,8 @@ class WebUI:
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--gs_source", type=str, required=True)  # gs ply or obj file?
+    parser.add_argument("--gs_source", type=str, required=True)
+    parser.add_argument("--mesh", type=str, required=True)  # gs ply or obj file?
     parser.add_argument("--colmap_dir", type=str, required=True)  #
 
     args = parser.parse_args()
