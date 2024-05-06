@@ -1,8 +1,10 @@
-"""ARAP (As-Rigid-As-Possible) deformation using a web UI.
-"""
+"""ARAP (As-Rigid-As-Possible) deformation using a web UI."""
 
 import time
 from typing import List
+import datetime
+import os
+from pathlib import Path
 
 import numpy as np
 import trimesh.creation
@@ -73,6 +75,18 @@ class DraggingViserUI:
 
         self.deformer = Deformer()
         self.deformer.set_mesh(self.mesh.vertices, self.mesh.faces)
+
+        with self.server.add_gui_folder("Mesh setting"):
+            self.save_mesh_handle = self.server.add_gui_button("Save mesh")
+
+        @self.save_mesh_handle.on_click
+        def _(_):
+            current_time = datetime.datetime.now()
+            formatted_time = current_time.strftime("%Y-%m-%d-%H:%M")
+            Path("mesh_export").mkdir(parents=True, exist_ok=True)
+            trimesh.Trimesh(
+                vertices=to_numpy(self.deformer.verts_prime), faces=self.mesh.faces
+            ).export(os.path.join("mesh_export", "{}.obj".format(formatted_time)))
 
         with self.server.add_gui_folder("Handles"):
             self.add_drag_handle = self.server.add_gui_button("Add drag handle")
