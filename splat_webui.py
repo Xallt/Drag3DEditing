@@ -9,7 +9,6 @@ import trimesh
 import viser
 import viser.transforms as tf
 from viser.theme import TitlebarButton, TitlebarConfig, TitlebarImage
-from PIL import Image
 
 from gaussiansplatting.gaussian_renderer import render
 from gaussiansplatting.scene import GaussianModel
@@ -24,7 +23,7 @@ from omegaconf import OmegaConf
 from argparse import ArgumentParser
 
 from gaussiansplatting.scene.camera_scene import CamScene
-import math
+import dgl
 
 import os
 import random
@@ -105,6 +104,12 @@ class WebUI:
         _, self.vertex_matches = proximity_query.vertex(self.gaussian._xyz.detach().cpu().numpy())
 
         self.deformer = Deformer()
+
+        edges = np.concatenate((self.mesh.faces[:, [0, 1]], self.mesh.faces[:, [1, 2]], self.mesh.faces[:, [0, 2]]), axis=0)
+        edges = np.concatenate((edges, np.flip(edges, axis=1)), axis=0)
+        edges = np.unique(edges, axis=0)
+        self.graph = dgl.graph(edges.tolist(), device='cuda')
+
 
         self.hit_pos_handles = []
         self.hit_pos_controls = []
@@ -226,6 +231,33 @@ class WebUI:
                 handle.position = hit_pos + normal * 0.03
                 self.hit_pos_controls.append(DraggingControlPointer(hit_pos, tri_index, handle))
                 self.add_hit_handle(np.zeros(3), f"/control_{len(self.hit_pos_handles)}/sphere")
+                
+
+                # Visualize affected area
+                d = 10
+                self.affected_nodes = []
+                self.border_nodes = []
+                for i, node_list in enumerate(dgl.traversal.bfs_nodes_generator(self.graph, self.mesh.faces[tri_index])):
+                    if i == d:
+                        break
+                    self.affected_nodes += node_list
+                    if i == d - 1:
+                        self.border_nodes = node_list
+                self.affected_nodes_mask = np.zeros(len(self.mesh.vertices), dtype=bool)
+                self.affected_nodes_mask[self.affected_nodes] = True
+                self.border_nodes_mask = np.zeros(len(self.mesh.vertices), dtype=bool)
+                self.border_nodes_mask[self.border_nodes] = True
+                vertex_color = np.ones((len(self.mesh.vertices), 3))
+                vertex_color[self.affected_nodes] = [1, 0, 0]
+                visuals = trimesh.visual.ColorVisuals(vertex_colors=vertex_color)
+                self.mesh.visual = visuals
+                self.mesh_handle = self.server.add_mesh_trimesh(
+                    name="/mesh",
+                    mesh=self.mesh,
+                    # wxyz=tf.SO3.from_x_radians(np.pi / 2).wxyz,
+                    position=(0.0, 0.0, 0.0),
+                    visible=self.view_mode == "mesh",
+                )
         @self.add_fixed_handle.on_click
         def _(_):
             self.add_fixed_handle.disabled = True
@@ -344,25 +376,34 @@ class WebUI:
 
         @self.dragging_handle.on_click
         def _(_):
-            self.deformer.set_mesh(self.mesh.vertices, self.mesh.faces)
+            vertices, faces = self.get_mesh_to_edit()
+            with self.viewer_lock:
+                self.deformer.set_mesh(vertices, faces)
 
             deformation = np.eye(4)
             deformation[:3, 3] = self.hit_pos_controls[0].control.position - self.hit_pos_controls[0].hit_pos
             self.deformer.set_deformation(deformation)
 
-            fixed_tri_indices = [control.tri_index for control in self.fixed_handles]
+            # fixed_tri_indices = [control.tri_index for control in self.fixed_handles]
 
             selection_list = []
             for control in self.hit_pos_controls:
                 selection_list += self.mesh.faces[control.tri_index].tolist()
 
+            old_to_new_vertex_mapping = np.zeros(len(self.mesh.vertices), dtype=int)
+            old_to_new_vertex_mapping[self.affected_nodes_mask] = np.arange(len(self.affected_nodes))
+            border_nodes_new_indices = old_to_new_vertex_mapping[self.border_nodes]
+
+            print(len(border_nodes_new_indices))
+            print(len(self.affected_nodes))
+
             selection = {
-                "selection": selection_list,
-                "fixed": list(set(self.mesh.faces[fixed_tri_indices].reshape(-1))),
+                "selection": [0, 1, 2], # in the bfs list, the first 3 elements are the queried face
+                "fixed": border_nodes_new_indices,
             }
             self.deformer.set_selection(selection["selection"], selection["fixed"])
 
-            self.deformer.apply_deformation(3)
+            self.deformer.apply_deformation(10)
 
 
         with torch.no_grad():
@@ -375,6 +416,18 @@ class WebUI:
             for i in frame_index:
                 self.make_one_camera_pose_frame(i)
 
+    def get_mesh_to_edit(self):
+        vertices = self.mesh.vertices[self.affected_nodes_mask]
+
+        old_to_new_vertex_mapping = np.zeros(len(self.mesh.vertices), dtype=int)
+        old_to_new_vertex_mapping[self.affected_nodes_mask] = np.arange(len(self.affected_nodes))
+
+        faces = self.mesh.faces
+        faces_affected_mask = self.affected_nodes_mask[faces]
+        faces_affected_mask = faces_affected_mask.all(axis=1)
+        faces = faces[faces_affected_mask]
+        faces = old_to_new_vertex_mapping[faces] # faces remapped to the new vertex indices
+        return vertices, faces
     def add_hit_handle(self, hit_pos, name, color=(1.0, 0.0, 0.0)):
         # Create a sphere at the hit location.
         hit_pos_mesh = trimesh.creation.icosphere(radius=0.005 * self.mesh_diameter)
@@ -658,9 +711,11 @@ class WebUI:
             if self.has_active_client():
                 self.update_viewer()
             if hasattr(self.deformer, "graph"):
-                if not np.allclose(to_numpy(self.deformer.verts_prime), self.mesh.vertices, atol=1e-5):
-                    verts_updated = to_numpy(self.deformer.verts_prime)
-                    cell_rotations = to_numpy(self.deformer.cell_rotations)
+                if not np.allclose(to_numpy(self.deformer.verts_prime), self.mesh.vertices[self.affected_nodes_mask], atol=1e-5):
+                    verts_updated = self.mesh.vertices.copy()
+                    verts_updated[self.affected_nodes_mask] = to_numpy(self.deformer.verts_prime)
+                    cell_rotations = np.eye(3)[None].repeat(len(self.mesh.vertices), axis=0)
+                    cell_rotations[self.affected_nodes_mask] = to_numpy(self.deformer.cell_rotations)
                     self.gaussian._xyz.data += torch.from_numpy((verts_updated - self.mesh.vertices)[self.vertex_matches]).to(self.gaussian._xyz.data)
                     self.gaussian._rotation.data = torch.from_numpy(
                         tf.SO3.from_matrix(
