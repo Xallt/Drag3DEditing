@@ -113,7 +113,6 @@ class WebUI:
 
         self.hit_pos_handles = []
         self.hit_pos_controls = []
-        self.fixed_handles = []
 
         self.add_theme()
         self.draw_flag = True
@@ -201,8 +200,10 @@ class WebUI:
 
         with self.server.add_gui_folder("Dragging controls"):
             self.add_drag_handle = self.server.add_gui_button("Add drag handle")
-            self.add_fixed_handle = self.server.add_gui_button("Add fixed point")
             self.clear_button_handle = self.server.add_gui_button("Clear handles")
+            self.neighborhood_radius_slider = self.server.add_gui_slider(
+                "Neighborhood radius", min=2, max=50, step=1, initial_value=5
+            )
 
         self.drag_handles = []
 
@@ -234,48 +235,7 @@ class WebUI:
 
                 # Visualize affected area
                 d = 10
-                self.affected_nodes = []
-                self.border_nodes = []
-                for i, node_list in enumerate(dgl.traversal.bfs_nodes_generator(self.graph, self.mesh.faces[tri_index])):
-                    if i == d:
-                        break
-                    self.affected_nodes += node_list
-                    if i == d - 1:
-                        self.border_nodes = node_list
-                self.affected_nodes_mask = np.zeros(len(self.mesh.vertices), dtype=bool)
-                self.affected_nodes_mask[self.affected_nodes] = True
-                self.border_nodes_mask = np.zeros(len(self.mesh.vertices), dtype=bool)
-                self.border_nodes_mask[self.border_nodes] = True
-                vertex_color = np.ones((len(self.mesh.vertices), 3))
-                vertex_color[self.affected_nodes] = [1, 0, 0]
-                visuals = trimesh.visual.ColorVisuals(vertex_colors=vertex_color)
-                self.mesh.visual = visuals
-                self.mesh_handle = self.server.add_mesh_trimesh(
-                    name="/mesh",
-                    mesh=self.mesh,
-                    # wxyz=tf.SO3.from_x_radians(np.pi / 2).wxyz,
-                    position=(0.0, 0.0, 0.0),
-                    visible=self.view_mode == "mesh",
-                )
-        @self.add_fixed_handle.on_click
-        def _(_):
-            self.add_fixed_handle.disabled = True
-
-            @self.server.on_scene_pointer("click")
-            def scene_click_cb(message: viser.ScenePointerEvent) -> None:
-                ray_hit = self.ray_intersection(message.ray_origin, message.ray_direction)
-                if ray_hit is None:
-                    return
-                hit_pos, tri_index = ray_hit.hit_pos, ray_hit.tri_index
-
-                # Successful click => remove callback.
-                self.add_fixed_handle.disabled = False
-                self.server.remove_scene_pointer_callback()
-
-                self.add_hit_handle(
-                    hit_pos, f"/fixed_{len(self.hit_pos_handles)}", color=(1.0, 1.0, 0.0)
-                )
-                self.fixed_handles.append(FixedControlPointer(hit_pos, tri_index))
+                self.set_deformable_area(tri_index, d)
 
         @self.clear_button_handle.on_click
         def _(_):
@@ -291,6 +251,10 @@ class WebUI:
         with self.server.add_gui_folder("Preprocessing") as self.preprocessing_folder:
             self.sphere_cut_button_handle = self.server.add_gui_button("Add sphere for cutting")
             self.sphere_cut_data = None
+
+        @self.neighborhood_radius_slider.on_update
+        def _(_):
+            self.set_deformable_area(self.hit_pos_controls[0].tri_index, self.neighborhood_radius_slider.value)
 
         @self.sphere_cut_button_handle.on_click
         def _(_):
@@ -385,8 +349,6 @@ class WebUI:
             deformation[:3, 3] = self.hit_pos_controls[0].control.position - self.hit_pos_controls[0].hit_pos
             self.deformer.set_deformation(deformation)
 
-            # fixed_tri_indices = [control.tri_index for control in self.fixed_handles]
-
             selection_list = []
             for control in self.hit_pos_controls:
                 selection_list += self.mesh.faces[control.tri_index].tolist()
@@ -416,6 +378,31 @@ class WebUI:
             )
             for i in frame_index:
                 self.make_one_camera_pose_frame(i)
+
+    def set_deformable_area(self, tri_index, d):
+        self.affected_nodes = []
+        self.border_nodes = []
+        for i, node_list in enumerate(dgl.traversal.bfs_nodes_generator(self.graph, self.mesh.faces[tri_index])):
+            if i == d:
+                break
+            self.affected_nodes += node_list
+            if i == d - 1:
+                self.border_nodes = node_list
+        self.affected_nodes_mask = np.zeros(len(self.mesh.vertices), dtype=bool)
+        self.affected_nodes_mask[self.affected_nodes] = True
+        self.border_nodes_mask = np.zeros(len(self.mesh.vertices), dtype=bool)
+        self.border_nodes_mask[self.border_nodes] = True
+        vertex_color = np.ones((len(self.mesh.vertices), 3))
+        vertex_color[self.affected_nodes] = [1, 0, 0]
+        visuals = trimesh.visual.ColorVisuals(vertex_colors=vertex_color)
+        self.mesh.visual = visuals
+        self.mesh_handle = self.server.add_mesh_trimesh(
+            name="/mesh",
+            mesh=self.mesh,
+            # wxyz=tf.SO3.from_x_radians(np.pi / 2).wxyz,
+            position=(0.0, 0.0, 0.0),
+            visible=self.view_mode == "mesh",
+        )
 
     def get_mesh_to_edit(self):
         vertices = self.mesh.vertices[self.affected_nodes_mask]
