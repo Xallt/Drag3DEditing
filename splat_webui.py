@@ -218,7 +218,6 @@ class WebUI:
                 hit_pos, tri_index, normal = ray_hit.hit_pos, ray_hit.tri_index, ray_hit.normal
 
                 # Successful click => remove callback.
-                self.add_drag_handle.disabled = False
                 self.server.remove_scene_pointer_callback()
 
                 self.add_hit_handle(hit_pos, f"/hit_pos_{len(self.hit_pos_handles)}")
@@ -286,6 +285,8 @@ class WebUI:
                 handle.control.remove()
             self.hit_pos_handles.clear()
             self.hit_pos_controls.clear()
+
+            self.add_drag_handle.disabled = False
 
         with self.server.add_gui_folder("Preprocessing") as self.preprocessing_folder:
             self.sphere_cut_button_handle = self.server.add_gui_button("Add sphere for cutting")
