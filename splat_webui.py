@@ -356,12 +356,10 @@ class WebUI:
             old_to_new_vertex_mapping = np.zeros(len(self.mesh.vertices), dtype=int)
             old_to_new_vertex_mapping[self.affected_nodes_mask] = np.arange(len(self.affected_nodes))
             border_nodes_new_indices = old_to_new_vertex_mapping[self.border_nodes]
-
-            print(len(border_nodes_new_indices))
-            print(len(self.affected_nodes))
+            selection_nodes_new_indices = old_to_new_vertex_mapping[self.selected_nodes]
 
             selection = {
-                "selection": [0, 1, 2], # in the bfs list, the first 3 elements are the queried face
+                "selection": selection_nodes_new_indices, # in the bfs list, the first 3 elements are the queried face
                 "fixed": border_nodes_new_indices,
             }
             self.deformer.set_selection(selection["selection"], selection["fixed"])
@@ -380,18 +378,20 @@ class WebUI:
                 self.make_one_camera_pose_frame(i)
 
     def set_deformable_area(self, tri_index, d):
-        self.affected_nodes = []
-        self.border_nodes = []
-        for i, node_list in enumerate(dgl.traversal.bfs_nodes_generator(self.graph, self.mesh.faces[tri_index])):
-            if i == d:
-                break
-            self.affected_nodes += node_list
-            if i == d - 1:
-                self.border_nodes = node_list
-        self.affected_nodes_mask = np.zeros(len(self.mesh.vertices), dtype=bool)
-        self.affected_nodes_mask[self.affected_nodes] = True
-        self.border_nodes_mask = np.zeros(len(self.mesh.vertices), dtype=bool)
-        self.border_nodes_mask[self.border_nodes] = True
+        with self.viewer_lock:
+            self.affected_nodes = []
+            self.selected_nodes = []
+            self.border_nodes = []
+            for i, node_list in enumerate(dgl.traversal.bfs_nodes_generator(self.graph, self.mesh.faces[tri_index])):
+                if i == 0:
+                    self.selected_nodes = node_list
+                if i == d:
+                    break
+                self.affected_nodes += node_list
+                if i == d - 1:
+                    self.border_nodes = node_list
+            self.affected_nodes_mask = np.zeros(len(self.mesh.vertices), dtype=bool)
+            self.affected_nodes_mask[self.affected_nodes] = True
         vertex_color = np.ones((len(self.mesh.vertices), 3))
         vertex_color[self.affected_nodes] = [1, 0, 0]
         visuals = trimesh.visual.ColorVisuals(vertex_colors=vertex_color)
