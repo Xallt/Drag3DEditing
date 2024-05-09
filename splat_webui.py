@@ -726,62 +726,6 @@ class WebUI:
         out = self.prepare_output_image(output)
         self.server.set_background_image(out, format="jpeg")
 
-    def densify_and_prune(self, step):
-        if step <= self.densify_until_step.value:
-            self.gaussian.max_radii2D[self.visibility_filter] = torch.max(
-                self.gaussian.max_radii2D[self.visibility_filter],
-                self.radii[self.visibility_filter],
-            )
-            self.gaussian.add_densification_stats(
-                self.viewspace_point_tensor.grad, self.visibility_filter
-            )
-
-            if step > 0 and step % self.densification_interval.value == 0:
-                self.gaussian.densify_and_prune(
-                    max_grad=1e-7,
-                    max_densify_percent=self.max_densify_percent.value,
-                    min_opacity=self.min_opacity.value,
-                    extent=self.cameras_extent,
-                    max_screen_size=5,
-                )
-
-    def add_theme(self):
-        buttons = (
-            TitlebarButton(
-                text="Getting Started",
-                icon=None,
-                href="https://github.com/buaacyw/GaussianEditor/blob/master/docs/webui.md",
-            ),
-            TitlebarButton(
-                text="Github",
-                icon="GitHub",
-                href="https://github.com/buaacyw/GaussianEditor",
-            ),
-            TitlebarButton(
-                text="Yiwen Chen",
-                icon=None,
-                href="https://buaacyw.github.io/",
-            ),
-            TitlebarButton(
-                text="Zilong Chen",
-                icon=None,
-                href="https://scholar.google.com/citations?user=2pbka1gAAAAJ&hl=en",
-            ),
-        )
-        image = TitlebarImage(
-            image_url_light="https://github.com/buaacyw/gaussian-editor/raw/master/static/images/logo.png",
-            image_alt="GaussianEditor Logo",
-            href="https://buaacyw.github.io/gaussian-editor/",
-        )
-        titlebar_theme = TitlebarConfig(buttons=buttons, image=image)
-        brand_color = self.server.add_gui_rgb("Brand color", (7, 0, 8), visible=False)
-
-        self.server.configure_theme(
-            titlebar_content=titlebar_theme,
-            show_logo=True,
-            brand_color=brand_color.value,
-        )
-
 
 if __name__ == "__main__":
     parser = ArgumentParser()
