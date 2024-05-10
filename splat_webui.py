@@ -44,6 +44,7 @@ from arap_webui import DraggingControlPointer, RayHit, FixedControlPointer, to_n
 sys.path.insert(0, "deps/as-rigid-as-possible")
 from arap import Deformer
 
+import sdguidance
 
 class WebUI:
     def __init__(self, cfg) -> None:
@@ -114,7 +115,6 @@ class WebUI:
         self.hit_pos_handles = []
         self.hit_pos_controls = []
 
-        self.add_theme()
         self.draw_flag = True
         self.view_mode = "gaussian"
         with self.server.add_gui_folder("View Mode") as self.view_folder:
@@ -311,6 +311,7 @@ class WebUI:
             self.prompt_handle = self.server.add_gui_text("SD Prompt", "")
             self.train_lora_handle = self.server.add_gui_button("Train LoRA")
             self.dragging_handle = self.server.add_gui_button("Start Dragging")
+            self.sds_training_handle = self.server.add_gui_button("Start SDS Training")
 
         @self.train_lora_handle.on_click
         def _(_):
@@ -365,6 +366,31 @@ class WebUI:
             self.deformer.set_selection(selection["selection"], selection["fixed"])
 
             self.deformer.apply_deformation(10)
+            del self.deformer.graph
+
+        @self.sds_training_handle.on_click
+        def _(_):
+            optimizer = self.get_optimizer()
+            sd = sdguidance.StableDiffusionGuidance({})
+            prompt_utils = sdguidance.StableDiffusionPromptProcessor({})()
+            num_epochs = 100
+            for i in tqdm(range(num_epochs)):
+                for cam_idx in range(len(self.colmap_cameras)):
+                    render_pkg = render(self.colmap_cameras[cam_idx], self.gaussian, self.pipe, self.background_tensor)
+                    guidance_out = sd(
+                        render_pkg['render'].permute(1, 2, 0)[None],
+                        prompt_utils, 
+                        rgb_as_latents=False, 
+                        elevation=torch.tensor([0]).to('cuda').float(), 
+                        azimuth=torch.tensor([0]).to('cuda').float(), 
+                        camera_distances=torch.tensor([1]).to('cuda').float(), 
+                    )
+
+                    optimizer.zero_grad()
+                    guidance_out['loss_sds'].backward()
+                    optimizer.step()
+                    
+                    
 
 
         with torch.no_grad():
@@ -377,6 +403,39 @@ class WebUI:
             for i in frame_index:
                 self.make_one_camera_pose_frame(i)
 
+    def get_optimizer(self):
+        parser = ArgumentParser(description="Training script parameters")
+        opt_config = OptimizationParams(parser, max_steps=1800, lr_scaler=100)
+        self.gaussian.training_setup(opt_config)
+        l = [
+            {
+                "params": [self.gaussian._features_dc],
+                "lr": opt_config.feature_lr,
+                "name": "f_dc",
+            },
+            {
+                "params": [self.gaussian._features_rest],
+                "lr": opt_config.feature_lr / 20.0,
+                "name": "f_rest",
+            },
+            {
+                "params": [self.gaussian._scaling],
+                "lr": opt_config.scaling_lr,
+                "name": "scaling",
+            },
+            {
+                "params": [self.gaussian._rotation],
+                "lr": opt_config.rotation_lr,
+                "name": "rotation",
+            },
+            {
+                "params": [self.gaussian._opacity],
+                "lr": opt_config.opacity_lr,
+                "name": "opacity",
+            },
+        ]
+        optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+        return optimizer
     def set_deformable_area(self, tri_index, d):
         with self.viewer_lock:
             self.affected_nodes = []
