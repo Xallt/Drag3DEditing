@@ -309,35 +309,35 @@ class WebUI:
 
         with self.server.add_gui_folder("Editing"):
             self.prompt_handle = self.server.add_gui_text("SD Prompt", "")
-            self.train_lora_handle = self.server.add_gui_button("Train LoRA")
+            # self.train_lora_handle = self.server.add_gui_button("Train LoRA")
             self.dragging_handle = self.server.add_gui_button("Start Dragging")
             self.sds_training_handle = self.server.add_gui_button("Start SDS Training")
 
-        @self.train_lora_handle.on_click
-        def _(_):
-            model_path = "runwayml/stable-diffusion-v1-5"
-            vae_path = "default"
-            lora_path = "./lora_tmp"
-            lora_step = 80
-            lora_lr = 0.0005
-            lora_batch_size = 4
-            lora_rank = 16
-            imgs = []
-            for cam in self.colmap_cameras:
-                with torch.no_grad():
-                    render_pkg = self.render(cam)
-                imgs.append((render_pkg["comp_rgb"][0].cpu().numpy().copy() * 255).astype(np.uint8))
-            train_lora(
-                imgs,
-                self.prompt_handle.value,
-                model_path,
-                vae_path,
-                lora_path,
-                lora_step,
-                lora_lr,
-                lora_batch_size,
-                lora_rank,
-            )
+        # @self.train_lora_handle.on_click
+        # def _(_):
+        #     model_path = "runwayml/stable-diffusion-v1-5"
+        #     vae_path = "default"
+        #     lora_path = "./lora_tmp"
+        #     lora_step = 80
+        #     lora_lr = 0.0005
+        #     lora_batch_size = 4
+        #     lora_rank = 16
+        #     imgs = []
+        #     for cam in self.colmap_cameras:
+        #         with torch.no_grad():
+        #             render_pkg = self.render(cam)
+        #         imgs.append((render_pkg["comp_rgb"][0].cpu().numpy().copy() * 255).astype(np.uint8))
+        #     train_lora(
+        #         imgs,
+        #         self.prompt_handle.value,
+        #         model_path,
+        #         vae_path,
+        #         lora_path,
+        #         lora_step,
+        #         lora_lr,
+        #         lora_batch_size,
+        #         lora_rank,
+        #     )
 
 
         @self.dragging_handle.on_click
