@@ -248,7 +248,7 @@ class WebUI:
                 bary_w = trimesh.triangles.points_to_barycentric(
                     self.mesh.vertices[self.mesh.faces[tri_index]][None],
                     hit_pos[None]
-                )
+                )[0]
 
 
                 # Successful click => remove callback.
@@ -800,20 +800,31 @@ class WebUI:
         while True:
             if self.has_active_client():
                 self.update_viewer()
-            if hasattr(self.deformer, "graph"):
+            if hasattr(self.deformer, "graph") and "verts_prime" in self.deformer.graph.ndata:
                 if not np.allclose(to_numpy(self.deformer.verts_prime), self.mesh.vertices[self.affected_nodes_mask], atol=1e-5):
-                    verts_updated = self.mesh.vertices.copy()
-                    verts_updated[self.affected_nodes_mask] = to_numpy(self.deformer.verts_prime)
-                    cell_rotations = np.eye(3)[None].repeat(len(self.mesh.vertices), axis=0)
-                    cell_rotations[self.affected_nodes_mask] = to_numpy(self.deformer.cell_rotations)
-                    self.gaussian._xyz.data = torch.from_numpy((verts_updated - self._init_vertices)[self.vertex_matches]).to(self.gaussian._xyz.data) + self._init_xyz
-                    self.gaussian._rotation.data = torch.from_numpy(
-                        tf.SO3.from_matrix(
-                            cell_rotations[self.vertex_matches] @ \
-                            build_rotation(self._init_rotation).detach().cpu().numpy()
-                        ).as_quaternion_xyzw()[:, [3, 0, 1, 2]]
-                    ).to(self.gaussian._rotation)
-                    self.set_vertices(verts_updated)
+                    with self.viewer_lock:
+                        verts_updated = self.mesh.vertices.copy()
+                        verts_updated[self.affected_nodes_mask] = to_numpy(self.deformer.verts_prime)
+                        cell_rotations = np.eye(3)[None].repeat(len(self.mesh.vertices), axis=0)
+                        cell_rotations[self.affected_nodes_mask] = to_numpy(self.deformer.cell_rotations)
+                        self.gaussian._xyz.data = torch.from_numpy((verts_updated - self._init_vertices)[self.vertex_matches]).to(self.gaussian._xyz.data) + self._init_xyz
+                        self.gaussian._rotation.data = torch.from_numpy(
+                            tf.SO3.from_matrix(
+                                cell_rotations[self.vertex_matches] @ \
+                                build_rotation(self._init_rotation).detach().cpu().numpy()
+                            ).as_quaternion_xyzw()[:, [3, 0, 1, 2]]
+                        ).to(self.gaussian._rotation)
+                        self.set_vertices(verts_updated)
+
+                        for i, control in enumerate(self.hit_pos_controls):
+                            hit_pos_handle = self.hit_pos_handles[i]
+                            new_hit_pos = trimesh.triangles.barycentric_to_points(
+                                self.mesh.vertices[self.mesh.faces[control.tri_index]][None],
+                                control.bary_w[None]
+                            )[0]
+                            hit_pos_handle.position = new_hit_pos.view(np.ndarray).astype(np.float32)
+                            control.hit_pos = hit_pos_handle.position
+
             time.sleep(1e-2)
 
     @torch.no_grad()
