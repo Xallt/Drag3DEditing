@@ -364,7 +364,7 @@ class WebUI:
 
             deformation = np.eye(4)
             deformation[:3, 3] = self.hit_pos_controls[0].control.position - self.hit_pos_controls[0].hit_pos
-            self.deformer.set_deformation(deformation)
+            self.deformer.set_deformation([deformation])
 
             selection_list = []
             for control in self.hit_pos_controls:
@@ -375,11 +375,10 @@ class WebUI:
             border_nodes_new_indices = old_to_new_vertex_mapping[self.border_nodes]
             selection_nodes_new_indices = old_to_new_vertex_mapping[self.selected_nodes]
 
-            selection = {
-                "selection": selection_nodes_new_indices, # in the bfs list, the first 3 elements are the queried face
-                "fixed": border_nodes_new_indices,
-            }
-            self.deformer.set_selection(selection["selection"], selection["fixed"])
+            self.deformer.set_selection(
+                [selection_nodes_new_indices], 
+                border_nodes_new_indices
+            )
 
             self.deformer.apply_deformation(3)
             del self.deformer.graph
