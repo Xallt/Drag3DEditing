@@ -37,6 +37,7 @@ from drag_editing.utils import unproject, to_homogeneous, get_points, c2w_k_to_s
 from tqdm import tqdm
 from pathlib import Path
 from threading import Lock
+from dataclasses import dataclass, field
 
 from arap_webui import DraggingControlPointer, RayHit, FixedControlPointer, to_numpy
 
@@ -44,6 +45,15 @@ sys.path.insert(0, "deps/as-rigid-as-possible")
 from arap import Deformer
 
 import sdguidance
+
+@dataclass
+class DraggingControlPointer:
+    hit_pos: np.ndarray
+    tri_index: int
+    control: viser.TransformControlsHandle
+    selected_nodes: list = field(default_factory=list)
+    affected_nodes: list = field(default_factory=list)
+    border_nodes: list = field(default_factory=list)
 
 class WebUI:
     def __init__(self, cfg) -> None:
@@ -236,6 +246,7 @@ class WebUI:
 
                 # Successful click => remove callback.
                 self.server.remove_scene_pointer_callback()
+                self.add_drag_handle.disabled = False
 
                 self.add_hit_handle(hit_pos, f"/hit_pos_{len(self.hit_pos_handles)}")
                 handle = self.server.add_transform_controls(
@@ -251,7 +262,7 @@ class WebUI:
 
                 # Visualize affected area
                 d = 10
-                self.set_deformable_area(tri_index, d)
+                self.set_deformable_area(d)
 
         @self.clear_button_handle.on_click
         def _(_):
@@ -270,7 +281,7 @@ class WebUI:
 
         @self.neighborhood_radius_slider.on_update
         def _(_):
-            self.set_deformable_area(self.hit_pos_controls[0].tri_index, self.neighborhood_radius_slider.value)
+            self.set_deformable_area(self.neighborhood_radius_slider.value)
 
         @self.sphere_cut_button_handle.on_click
         def _(_):
@@ -362,21 +373,21 @@ class WebUI:
             with self.viewer_lock:
                 self.deformer.set_mesh(vertices, faces)
 
-            deformation = np.eye(4)
-            deformation[:3, 3] = self.hit_pos_controls[0].control.position - self.hit_pos_controls[0].hit_pos
-            self.deformer.set_deformation([deformation])
-
-            selection_list = []
+            deformation_list = []
             for control in self.hit_pos_controls:
-                selection_list += self.mesh.faces[control.tri_index].tolist()
+                deformation = np.eye(4)
+                deformation[:3, 3] = control.control.position - control.hit_pos
+                deformation_list.append(deformation)
+            self.deformer.set_deformation(deformation_list)
 
-            old_to_new_vertex_mapping = np.zeros(len(self.mesh.vertices), dtype=int)
-            old_to_new_vertex_mapping[self.affected_nodes_mask] = np.arange(len(self.affected_nodes))
-            border_nodes_new_indices = old_to_new_vertex_mapping[self.border_nodes]
-            selection_nodes_new_indices = old_to_new_vertex_mapping[self.selected_nodes]
+            selection_ids_list = []
+            for control in self.hit_pos_controls:
+                selection_ids_list.append(self.old_to_new_vertex_mapping[control.selected_nodes])
+
+            border_nodes_new_indices = self.old_to_new_vertex_mapping[self.border_nodes]
 
             self.deformer.set_selection(
-                [selection_nodes_new_indices], 
+                selection_ids_list, 
                 border_nodes_new_indices
             )
 
@@ -451,23 +462,28 @@ class WebUI:
         ]
         optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         return optimizer
-    def set_deformable_area(self, tri_index, d):
+    def set_deformable_area(self, d):
         with self.viewer_lock:
-            self.affected_nodes = []
-            self.selected_nodes = []
-            self.border_nodes = []
-            for i, node_list in enumerate(dgl.traversal.bfs_nodes_generator(self.graph, self.mesh.faces[tri_index])):
-                if i == 0:
-                    self.selected_nodes = node_list
-                if i == d:
-                    break
-                self.affected_nodes += node_list
-                if i == d - 1:
-                    self.border_nodes = node_list
             self.affected_nodes_mask = np.zeros(len(self.mesh.vertices), dtype=bool)
-            self.affected_nodes_mask[self.affected_nodes] = True
+            self.affected_nodes = []
+            self.border_nodes = []
+            for control in self.hit_pos_controls:
+                control.affected_nodes = []
+                control.selected_nodes = []
+                control.border_nodes = []
+                for i, node_list in enumerate(dgl.traversal.bfs_nodes_generator(self.graph, self.mesh.faces[control.tri_index])):
+                    if i == 0:
+                        control.selected_nodes = node_list
+                    if i == d:
+                        break
+                    control.affected_nodes += node_list
+                    if i == d - 1:
+                        control.border_nodes = node_list
+                self.affected_nodes_mask[control.affected_nodes] = True
+                self.affected_nodes += control.affected_nodes
+                self.border_nodes += control.border_nodes
         vertex_color = np.ones((len(self.mesh.vertices), 3))
-        vertex_color[self.affected_nodes] = [1, 0, 0]
+        vertex_color[self.affected_nodes_mask] = [1, 0, 0]
         visuals = trimesh.visual.ColorVisuals(vertex_colors=vertex_color)
         self.mesh.visual = visuals
         self.mesh_handle = self.server.add_mesh_trimesh(
@@ -486,14 +502,14 @@ class WebUI:
     def get_mesh_to_edit(self):
         vertices = self.mesh.vertices[self.affected_nodes_mask]
 
-        old_to_new_vertex_mapping = np.zeros(len(self.mesh.vertices), dtype=int)
-        old_to_new_vertex_mapping[self.affected_nodes_mask] = np.arange(len(self.affected_nodes))
+        self.old_to_new_vertex_mapping = np.zeros(len(self.mesh.vertices), dtype=int)
+        self.old_to_new_vertex_mapping[self.affected_nodes_mask] = np.arange(len(self.affected_nodes))
 
         faces = self.mesh.faces
         faces_affected_mask = self.affected_nodes_mask[faces]
         faces_affected_mask = faces_affected_mask.all(axis=1)
         faces = faces[faces_affected_mask]
-        faces = old_to_new_vertex_mapping[faces] # faces remapped to the new vertex indices
+        faces = self.old_to_new_vertex_mapping[faces] # faces remapped to the new vertex indices
         return vertices, faces
     def add_hit_handle(self, hit_pos, name, color=(1.0, 0.0, 0.0)):
         # Create a sphere at the hit location.
