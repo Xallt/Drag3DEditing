@@ -8,7 +8,6 @@ import trimesh
 
 import viser
 import viser.transforms as tf
-from viser.theme import TitlebarButton, TitlebarConfig, TitlebarImage
 
 from gaussiansplatting.gaussian_renderer import render
 from gaussiansplatting.scene import GaussianModel
@@ -111,6 +110,7 @@ class WebUI:
         edges = np.unique(edges, axis=0)
         self.graph = dgl.graph(edges.tolist(), device='cuda')
 
+        self.set_initial_model()
 
         self.hit_pos_handles = []
         self.hit_pos_controls = []
@@ -121,7 +121,7 @@ class WebUI:
             self.switch_view_button = self.server.add_gui_button("Switch View to Mesh")
         with self.server.add_gui_folder("Render Setting"):
             self.resolution_slider = self.server.add_gui_slider(
-                "Resolution", min=384, max=4096, step=2, initial_value=512
+                "Resolution", min=384, max=1600, step=2, initial_value=512
             )
 
             # self.FoV_slider = self.server.add_gui_slider(
@@ -138,6 +138,8 @@ class WebUI:
                 ],
             )
 
+            self.reset_button = self.server.add_gui_button("Reset")
+
             self.load_button = self.server.add_gui_button("Load Gaussian")
             self.load_path = self.server.add_gui_text("Load Path", self.gs_source)
             self.save_button = self.server.add_gui_button("Save Gaussian")
@@ -145,6 +147,20 @@ class WebUI:
             self.frame_show = self.server.add_gui_checkbox(
                 "Show Frame", initial_value=False
             )
+
+        @self.reset_button.on_click
+        def _(_):
+            with self.viewer_lock:
+                self.gaussian.load_ply(self.gs_source)
+                self.mesh = trimesh.load(cfg.mesh)
+                self.mesh_handle = self.server.add_mesh_trimesh(
+                    name="/mesh",
+                    mesh=self.mesh,
+                    # wxyz=tf.SO3.from_x_radians(np.pi / 2).wxyz,
+                    position=(0.0, 0.0, 0.0),
+                    visible=self.view_mode == "mesh",
+                )
+                self.set_initial_model()
 
         @self.switch_view_button.on_click
         def on_switch_view_button_click(_):
@@ -365,7 +381,7 @@ class WebUI:
             }
             self.deformer.set_selection(selection["selection"], selection["fixed"])
 
-            self.deformer.apply_deformation(10)
+            self.deformer.apply_deformation(3)
             del self.deformer.graph
 
         @self.sds_training_handle.on_click
@@ -462,6 +478,11 @@ class WebUI:
             position=(0.0, 0.0, 0.0),
             visible=self.view_mode == "mesh",
         )
+
+    def set_initial_model(self):
+        self._init_xyz = self.gaussian._xyz.data.clone()
+        self._init_rotation = self.gaussian._rotation.data.clone()
+        self._init_vertices = self.mesh.vertices.copy()
 
     def get_mesh_to_edit(self):
         vertices = self.mesh.vertices[self.affected_nodes_mask]
@@ -763,11 +784,11 @@ class WebUI:
                     verts_updated[self.affected_nodes_mask] = to_numpy(self.deformer.verts_prime)
                     cell_rotations = np.eye(3)[None].repeat(len(self.mesh.vertices), axis=0)
                     cell_rotations[self.affected_nodes_mask] = to_numpy(self.deformer.cell_rotations)
-                    self.gaussian._xyz.data += torch.from_numpy((verts_updated - self.mesh.vertices)[self.vertex_matches]).to(self.gaussian._xyz.data)
+                    self.gaussian._xyz.data = torch.from_numpy((verts_updated - self._init_vertices)[self.vertex_matches]).to(self.gaussian._xyz.data) + self._init_xyz
                     self.gaussian._rotation.data = torch.from_numpy(
                         tf.SO3.from_matrix(
                             cell_rotations[self.vertex_matches] @ \
-                            build_rotation(self.gaussian._rotation).detach().cpu().numpy()
+                            build_rotation(self._init_rotation).detach().cpu().numpy()
                         ).as_quaternion_xyzw()[:, [3, 0, 1, 2]]
                     ).to(self.gaussian._rotation)
                     self.set_vertices(verts_updated)
