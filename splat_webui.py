@@ -32,9 +32,9 @@ import datetime
 
 import cv2
 from drag_editing.utils import unproject, to_homogeneous, get_points, c2w_k_to_simple_camera
-from drag_editing.lora_utils import train_lora
-from drag_editing.drag_utils import run_drag
-from drag_editing.gaussian_dragging_pipeline import GaussianDraggingPipeline
+# from drag_editing.lora_utils import train_lora
+# from drag_editing.drag_utils import run_drag
+# from drag_editing.gaussian_dragging_pipeline import GaussianDraggingPipeline
 from tqdm import tqdm
 from pathlib import Path
 from threading import Lock
