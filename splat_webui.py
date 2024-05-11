@@ -51,6 +51,7 @@ class DraggingControlPointer:
     hit_pos: np.ndarray
     tri_index: int
     control: viser.TransformControlsHandle
+    bary_w: np.ndarray
     selected_nodes: list = field(default_factory=list)
     affected_nodes: list = field(default_factory=list)
     border_nodes: list = field(default_factory=list)
@@ -244,6 +245,12 @@ class WebUI:
                     return
                 hit_pos, tri_index, normal = ray_hit.hit_pos, ray_hit.tri_index, ray_hit.normal
 
+                bary_w = trimesh.triangles.points_to_barycentric(
+                    self.mesh.vertices[self.mesh.faces[tri_index]][None],
+                    hit_pos[None]
+                )
+
+
                 # Successful click => remove callback.
                 self.server.remove_scene_pointer_callback()
                 self.add_drag_handle.disabled = False
@@ -256,7 +263,7 @@ class WebUI:
                     disable_rotations=True,
                 )
                 handle.position = hit_pos + normal * 0.03
-                self.hit_pos_controls.append(DraggingControlPointer(hit_pos, tri_index, handle))
+                self.hit_pos_controls.append(DraggingControlPointer(hit_pos, tri_index, handle, bary_w))
                 self.add_hit_handle(np.zeros(3), f"/control_{len(self.hit_pos_handles)}/sphere")
                 
 
