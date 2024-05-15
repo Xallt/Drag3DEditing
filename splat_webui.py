@@ -8,7 +8,6 @@ import trimesh
 
 import viser
 import viser.transforms as tf
-from viser.theme import TitlebarButton, TitlebarConfig, TitlebarImage
 
 from gaussiansplatting.gaussian_renderer import render
 from gaussiansplatting.scene import GaussianModel
@@ -32,12 +31,13 @@ import datetime
 
 import cv2
 from drag_editing.utils import unproject, to_homogeneous, get_points, c2w_k_to_simple_camera
-from drag_editing.lora_utils import train_lora
-from drag_editing.drag_utils import run_drag
-from drag_editing.gaussian_dragging_pipeline import GaussianDraggingPipeline
+# from drag_editing.lora_utils import train_lora
+# from drag_editing.drag_utils import run_drag
+# from drag_editing.gaussian_dragging_pipeline import GaussianDraggingPipeline
 from tqdm import tqdm
 from pathlib import Path
 from threading import Lock
+from dataclasses import dataclass, field
 
 from arap_webui import DraggingControlPointer, RayHit, FixedControlPointer, to_numpy
 
@@ -45,6 +45,16 @@ sys.path.insert(0, "deps/as-rigid-as-possible")
 from arap import Deformer
 
 import sdguidance
+
+@dataclass
+class DraggingControlPointer:
+    hit_pos: np.ndarray
+    tri_index: int
+    control: viser.TransformControlsHandle
+    bary_w: np.ndarray
+    selected_nodes: list = field(default_factory=list)
+    affected_nodes: list = field(default_factory=list)
+    border_nodes: list = field(default_factory=list)
 
 class WebUI:
     def __init__(self, cfg) -> None:
@@ -111,6 +121,7 @@ class WebUI:
         edges = np.unique(edges, axis=0)
         self.graph = dgl.graph(edges.tolist(), device='cuda')
 
+        self.set_initial_model()
 
         self.hit_pos_handles = []
         self.hit_pos_controls = []
@@ -121,7 +132,7 @@ class WebUI:
             self.switch_view_button = self.server.add_gui_button("Switch View to Mesh")
         with self.server.add_gui_folder("Render Setting"):
             self.resolution_slider = self.server.add_gui_slider(
-                "Resolution", min=384, max=4096, step=2, initial_value=512
+                "Resolution", min=384, max=1600, step=2, initial_value=512
             )
 
             # self.FoV_slider = self.server.add_gui_slider(
@@ -138,6 +149,8 @@ class WebUI:
                 ],
             )
 
+            self.reset_button = self.server.add_gui_button("Reset")
+
             self.load_button = self.server.add_gui_button("Load Gaussian")
             self.load_path = self.server.add_gui_text("Load Path", self.gs_source)
             self.save_button = self.server.add_gui_button("Save Gaussian")
@@ -145,6 +158,20 @@ class WebUI:
             self.frame_show = self.server.add_gui_checkbox(
                 "Show Frame", initial_value=False
             )
+
+        @self.reset_button.on_click
+        def _(_):
+            with self.viewer_lock:
+                self.gaussian.load_ply(self.gs_source)
+                self.mesh = trimesh.load(cfg.mesh)
+                self.mesh_handle = self.server.add_mesh_trimesh(
+                    name="/mesh",
+                    mesh=self.mesh,
+                    # wxyz=tf.SO3.from_x_radians(np.pi / 2).wxyz,
+                    position=(0.0, 0.0, 0.0),
+                    visible=self.view_mode == "mesh",
+                )
+                self.set_initial_model()
 
         @self.switch_view_button.on_click
         def on_switch_view_button_click(_):
@@ -218,8 +245,15 @@ class WebUI:
                     return
                 hit_pos, tri_index, normal = ray_hit.hit_pos, ray_hit.tri_index, ray_hit.normal
 
+                bary_w = trimesh.triangles.points_to_barycentric(
+                    self.mesh.vertices[self.mesh.faces[tri_index]][None],
+                    hit_pos[None]
+                )[0]
+
+
                 # Successful click => remove callback.
                 self.server.remove_scene_pointer_callback()
+                self.add_drag_handle.disabled = False
 
                 self.add_hit_handle(hit_pos, f"/hit_pos_{len(self.hit_pos_handles)}")
                 handle = self.server.add_transform_controls(
@@ -229,13 +263,13 @@ class WebUI:
                     disable_rotations=True,
                 )
                 handle.position = hit_pos + normal * 0.03
-                self.hit_pos_controls.append(DraggingControlPointer(hit_pos, tri_index, handle))
+                self.hit_pos_controls.append(DraggingControlPointer(hit_pos, tri_index, handle, bary_w))
                 self.add_hit_handle(np.zeros(3), f"/control_{len(self.hit_pos_handles)}/sphere")
                 
 
                 # Visualize affected area
                 d = 10
-                self.set_deformable_area(tri_index, d)
+                self.set_deformable_area(d)
 
         @self.clear_button_handle.on_click
         def _(_):
@@ -254,7 +288,7 @@ class WebUI:
 
         @self.neighborhood_radius_slider.on_update
         def _(_):
-            self.set_deformable_area(self.hit_pos_controls[0].tri_index, self.neighborhood_radius_slider.value)
+            self.set_deformable_area(self.neighborhood_radius_slider.value)
 
         @self.sphere_cut_button_handle.on_click
         def _(_):
@@ -311,35 +345,35 @@ class WebUI:
 
         with self.server.add_gui_folder("Editing"):
             self.prompt_handle = self.server.add_gui_text("SD Prompt", "")
-            self.train_lora_handle = self.server.add_gui_button("Train LoRA")
+            # self.train_lora_handle = self.server.add_gui_button("Train LoRA")
             self.dragging_handle = self.server.add_gui_button("Start Dragging")
             self.sds_training_handle = self.server.add_gui_button("Start SDS Training")
 
-        @self.train_lora_handle.on_click
-        def _(_):
-            model_path = "runwayml/stable-diffusion-v1-5"
-            vae_path = "default"
-            lora_path = "./lora_tmp"
-            lora_step = 80
-            lora_lr = 0.0005
-            lora_batch_size = 4
-            lora_rank = 16
-            imgs = []
-            for cam in self.colmap_cameras:
-                with torch.no_grad():
-                    render_pkg = self.render(cam)
-                imgs.append((render_pkg["comp_rgb"][0].cpu().numpy().copy() * 255).astype(np.uint8))
-            train_lora(
-                imgs,
-                self.prompt_handle.value,
-                model_path,
-                vae_path,
-                lora_path,
-                lora_step,
-                lora_lr,
-                lora_batch_size,
-                lora_rank,
-            )
+        # @self.train_lora_handle.on_click
+        # def _(_):
+        #     model_path = "runwayml/stable-diffusion-v1-5"
+        #     vae_path = "default"
+        #     lora_path = "./lora_tmp"
+        #     lora_step = 80
+        #     lora_lr = 0.0005
+        #     lora_batch_size = 4
+        #     lora_rank = 16
+        #     imgs = []
+        #     for cam in self.colmap_cameras:
+        #         with torch.no_grad():
+        #             render_pkg = self.render(cam)
+        #         imgs.append((render_pkg["comp_rgb"][0].cpu().numpy().copy() * 255).astype(np.uint8))
+        #     train_lora(
+        #         imgs,
+        #         self.prompt_handle.value,
+        #         model_path,
+        #         vae_path,
+        #         lora_path,
+        #         lora_step,
+        #         lora_lr,
+        #         lora_batch_size,
+        #         lora_rank,
+        #     )
 
 
         @self.dragging_handle.on_click
@@ -348,26 +382,25 @@ class WebUI:
             with self.viewer_lock:
                 self.deformer.set_mesh(vertices, faces)
 
-            deformation = np.eye(4)
-            deformation[:3, 3] = self.hit_pos_controls[0].control.position - self.hit_pos_controls[0].hit_pos
-            self.deformer.set_deformation(deformation)
-
-            selection_list = []
+            deformation_list = []
             for control in self.hit_pos_controls:
-                selection_list += self.mesh.faces[control.tri_index].tolist()
+                deformation = np.eye(4)
+                deformation[:3, 3] = control.control.position - control.hit_pos
+                deformation_list.append(deformation)
+            self.deformer.set_deformation(deformation_list)
 
-            old_to_new_vertex_mapping = np.zeros(len(self.mesh.vertices), dtype=int)
-            old_to_new_vertex_mapping[self.affected_nodes_mask] = np.arange(len(self.affected_nodes))
-            border_nodes_new_indices = old_to_new_vertex_mapping[self.border_nodes]
-            selection_nodes_new_indices = old_to_new_vertex_mapping[self.selected_nodes]
+            selection_ids_list = []
+            for control in self.hit_pos_controls:
+                selection_ids_list.append(self.old_to_new_vertex_mapping[control.selected_nodes])
 
-            selection = {
-                "selection": selection_nodes_new_indices, # in the bfs list, the first 3 elements are the queried face
-                "fixed": border_nodes_new_indices,
-            }
-            self.deformer.set_selection(selection["selection"], selection["fixed"])
+            border_nodes_new_indices = self.old_to_new_vertex_mapping[self.border_nodes]
 
-            self.deformer.apply_deformation(10)
+            self.deformer.set_selection(
+                selection_ids_list, 
+                border_nodes_new_indices
+            )
+
+            self.deformer.apply_deformation(3)
             del self.deformer.graph
 
         @self.sds_training_handle.on_click
@@ -439,23 +472,28 @@ class WebUI:
         ]
         optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         return optimizer
-    def set_deformable_area(self, tri_index, d):
+    def set_deformable_area(self, d):
         with self.viewer_lock:
-            self.affected_nodes = []
-            self.selected_nodes = []
-            self.border_nodes = []
-            for i, node_list in enumerate(dgl.traversal.bfs_nodes_generator(self.graph, self.mesh.faces[tri_index])):
-                if i == 0:
-                    self.selected_nodes = node_list
-                if i == d:
-                    break
-                self.affected_nodes += node_list
-                if i == d - 1:
-                    self.border_nodes = node_list
             self.affected_nodes_mask = np.zeros(len(self.mesh.vertices), dtype=bool)
-            self.affected_nodes_mask[self.affected_nodes] = True
+            self.affected_nodes = []
+            self.border_nodes = []
+            for control in self.hit_pos_controls:
+                control.affected_nodes = []
+                control.selected_nodes = []
+                control.border_nodes = []
+                for i, node_list in enumerate(dgl.traversal.bfs_nodes_generator(self.graph, self.mesh.faces[control.tri_index])):
+                    if i == 0:
+                        control.selected_nodes = node_list
+                    if i == d:
+                        break
+                    control.affected_nodes += node_list
+                    if i == d - 1:
+                        control.border_nodes = node_list
+                self.affected_nodes_mask[control.affected_nodes] = True
+                self.affected_nodes += control.affected_nodes
+                self.border_nodes += control.border_nodes
         vertex_color = np.ones((len(self.mesh.vertices), 3))
-        vertex_color[self.affected_nodes] = [1, 0, 0]
+        vertex_color[self.affected_nodes_mask] = [1, 0, 0]
         visuals = trimesh.visual.ColorVisuals(vertex_colors=vertex_color)
         self.mesh.visual = visuals
         self.mesh_handle = self.server.add_mesh_trimesh(
@@ -466,17 +504,22 @@ class WebUI:
             visible=self.view_mode == "mesh",
         )
 
+    def set_initial_model(self):
+        self._init_xyz = self.gaussian._xyz.data.clone()
+        self._init_rotation = self.gaussian._rotation.data.clone()
+        self._init_vertices = self.mesh.vertices.copy()
+
     def get_mesh_to_edit(self):
         vertices = self.mesh.vertices[self.affected_nodes_mask]
 
-        old_to_new_vertex_mapping = np.zeros(len(self.mesh.vertices), dtype=int)
-        old_to_new_vertex_mapping[self.affected_nodes_mask] = np.arange(len(self.affected_nodes))
+        self.old_to_new_vertex_mapping = np.zeros(len(self.mesh.vertices), dtype=int)
+        self.old_to_new_vertex_mapping[self.affected_nodes_mask] = np.arange(len(self.affected_nodes))
 
         faces = self.mesh.faces
         faces_affected_mask = self.affected_nodes_mask[faces]
         faces_affected_mask = faces_affected_mask.all(axis=1)
         faces = faces[faces_affected_mask]
-        faces = old_to_new_vertex_mapping[faces] # faces remapped to the new vertex indices
+        faces = self.old_to_new_vertex_mapping[faces] # faces remapped to the new vertex indices
         return vertices, faces
     def add_hit_handle(self, hit_pos, name, color=(1.0, 0.0, 0.0)):
         # Create a sphere at the hit location.
@@ -760,20 +803,31 @@ class WebUI:
         while True:
             if self.has_active_client():
                 self.update_viewer()
-            if hasattr(self.deformer, "graph"):
+            if hasattr(self.deformer, "graph") and "verts_prime" in self.deformer.graph.ndata:
                 if not np.allclose(to_numpy(self.deformer.verts_prime), self.mesh.vertices[self.affected_nodes_mask], atol=1e-5):
-                    verts_updated = self.mesh.vertices.copy()
-                    verts_updated[self.affected_nodes_mask] = to_numpy(self.deformer.verts_prime)
-                    cell_rotations = np.eye(3)[None].repeat(len(self.mesh.vertices), axis=0)
-                    cell_rotations[self.affected_nodes_mask] = to_numpy(self.deformer.cell_rotations)
-                    self.gaussian._xyz.data += torch.from_numpy((verts_updated - self.mesh.vertices)[self.vertex_matches]).to(self.gaussian._xyz.data)
-                    self.gaussian._rotation.data = torch.from_numpy(
-                        tf.SO3.from_matrix(
-                            cell_rotations[self.vertex_matches] @ \
-                            build_rotation(self.gaussian._rotation).detach().cpu().numpy()
-                        ).as_quaternion_xyzw()[:, [3, 0, 1, 2]]
-                    ).to(self.gaussian._rotation)
-                    self.set_vertices(verts_updated)
+                    with self.viewer_lock:
+                        verts_updated = self.mesh.vertices.copy()
+                        verts_updated[self.affected_nodes_mask] = to_numpy(self.deformer.verts_prime)
+                        cell_rotations = np.eye(3)[None].repeat(len(self.mesh.vertices), axis=0)
+                        cell_rotations[self.affected_nodes_mask] = to_numpy(self.deformer.cell_rotations)
+                        self.gaussian._xyz.data = torch.from_numpy((verts_updated - self._init_vertices)[self.vertex_matches]).to(self.gaussian._xyz.data) + self._init_xyz
+                        self.gaussian._rotation.data = torch.from_numpy(
+                            tf.SO3.from_matrix(
+                                cell_rotations[self.vertex_matches] @ \
+                                build_rotation(self._init_rotation).detach().cpu().numpy()
+                            ).as_quaternion_xyzw()[:, [3, 0, 1, 2]]
+                        ).to(self.gaussian._rotation)
+                        self.set_vertices(verts_updated)
+
+                        for i, control in enumerate(self.hit_pos_controls):
+                            hit_pos_handle = self.hit_pos_handles[i]
+                            new_hit_pos = trimesh.triangles.barycentric_to_points(
+                                self.mesh.vertices[self.mesh.faces[control.tri_index]][None],
+                                control.bary_w[None]
+                            )[0]
+                            hit_pos_handle.position = new_hit_pos.view(np.ndarray).astype(np.float32)
+                            control.hit_pos = hit_pos_handle.position
+
             time.sleep(1e-2)
 
     @torch.no_grad()
