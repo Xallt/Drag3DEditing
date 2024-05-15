@@ -305,6 +305,8 @@ class WebUI:
                 self.sphere_cut_data["radius"].remove()
                 cut_button.remove()
                 self.sphere_cut_data = None
+                proximity_query = trimesh.proximity.ProximityQuery(self.mesh)
+                _, self.vertex_matches = proximity_query.vertex(self.gaussian._xyz.detach().cpu().numpy())
 
 
         with self.server.add_gui_folder("Editing"):
