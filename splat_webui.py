@@ -395,15 +395,16 @@ class WebUI:
                     
 
 
-        with torch.no_grad():
-            self.frames = []
-            random.seed(0)
-            frame_index = random.sample(
-                range(0, len(self.colmap_cameras)),
-                min(len(self.colmap_cameras), 20),
-            )
-            for i in frame_index:
-                self.make_one_camera_pose_frame(i)
+        if self.colmap_cameras is not None:
+            with torch.no_grad():
+                self.frames = []
+                random.seed(0)
+                frame_index = random.sample(
+                    range(0, len(self.colmap_cameras)),
+                    min(len(self.colmap_cameras), 20),
+                )
+                for i in frame_index:
+                    self.make_one_camera_pose_frame(i)
 
     def get_optimizer(self):
         parser = ArgumentParser(description="Training script parameters")
@@ -694,8 +695,8 @@ class WebUI:
     def camera(self):
         if len(list(self.server.get_clients().values())) == 0:
             return None
+        self.aspect = list(self.server.get_clients().values())[0].camera.aspect
         if self.render_cameras is None and self.colmap_dir is not None:
-            self.aspect = list(self.server.get_clients().values())[0].camera.aspect
             self.render_cameras = CamScene(
                 self.colmap_dir, h=-1, w=-1, aspect=self.aspect
             ).cameras
@@ -792,7 +793,7 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--gs_source", type=str, required=True)
     parser.add_argument("--mesh", type=str, required=True)  # gs ply or obj file?
-    parser.add_argument("--colmap_dir", type=str, required=True)  #
+    parser.add_argument("--colmap_dir", type=str, required=False)  #
 
     args = parser.parse_args()
     webui = WebUI(args)
